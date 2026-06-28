@@ -63,14 +63,39 @@ make build          # produces ./sift (sift.exe on Windows); or: go build -o sif
 
 ### Via package managers
 
-Once a release is published (see [Releasing](#releasing)):
+**Homebrew** (macOS/Linux):
 
-| Platform | Command |
-| --- | --- |
-| Homebrew | `brew install Anshika2203/tap/sift` |
-| Scoop (Windows) | `scoop install sift` |
-| Debian/Ubuntu | `sudo dpkg -i sift_*.deb` |
-| Fedora/RHEL | `sudo rpm -i sift-*.rpm` |
+```sh
+brew install --cask Anshika2203/tap/sift
+# or tap once, then use the short name:
+#   brew tap Anshika2203/tap
+#   brew install --cask sift
+```
+
+**Scoop** (Windows):
+
+```sh
+scoop bucket add Anshika2203 https://github.com/Anshika2203/scoop-bucket
+scoop install sift
+```
+
+**Debian/Ubuntu, Fedora/RHEL, Alpine** — grab the package from the
+[latest release](https://github.com/Anshika2203/sift/releases/latest):
+
+```sh
+sudo dpkg -i sift_*_linux_amd64.deb                    # Debian/Ubuntu
+sudo rpm  -i sift_*_linux_amd64.rpm                    # Fedora/RHEL
+sudo apk add --allow-untrusted sift_*_linux_amd64.apk  # Alpine
+```
+
+> **Why not a bare `brew install sift`?** The short form (like `brew install fzf`)
+> only works for tools accepted into Homebrew's official **homebrew-core** catalog,
+> which is curated by Homebrew's maintainers and requires a project to be notable
+> and well-established — you can't self-publish there. A personal tap always uses
+> the `owner/tap/` prefix (or a one-time `brew tap`). Once `sift` gains traction it
+> can be submitted to homebrew-core, after which `brew install sift` would work for
+> everyone. (Scoop, by contrast, lets you use the bare `scoop install sift` as soon
+> as the bucket is added.)
 
 ## Usage
 
