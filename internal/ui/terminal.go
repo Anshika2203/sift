@@ -8,25 +8,33 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/Anshika2203/sift/internal/matcher"
+	"github.com/Anshika2203/sift/internal/pattern"
 )
 
 // Options configures an interactive session.
 type Options struct {
-	Prompt  string // text shown before the query, e.g. "> "
-	Query   string // initial query
-	Multi   bool   // allow selecting multiple items with Tab
-	Preview string // command template; "{}" is replaced by the highlighted item
-	Header  string // a fixed header line shown above the list
+	Prompt  string       // text shown before the query, e.g. "> "
+	Query   string       // initial query
+	Multi   bool         // allow selecting multiple items with Tab
+	Preview string       // command template; "{}" is replaced by the highlighted item
+	Header  []string     // fixed header lines shown above the list
+	Expect  []string     // extra keys that accept and report which key was pressed
+	Fuzzy   bool         // default term type fuzzy (true) or exact (--exact)
+	Case    pattern.Case // case-sensitivity policy
+	Sort    bool         // rank by score (false keeps input order)
 }
 
 // Result is what the user picked.
 type Result struct {
 	Selected []string // chosen items (empty when aborted)
 	Aborted  bool     // true if the user pressed Esc / Ctrl-C
+	Query    string   // the final query string
+	Key      string   // the expect key that was pressed (empty for plain Enter)
 }
 
 // Run shows the finder over items and blocks until the user accepts or aborts.
@@ -45,12 +53,18 @@ func Run(items []string, opts Options) (Result, error) {
 	defer screen.Fini()
 	screen.SetStyle(tcell.StyleDefault)
 
+	expect := make(map[string]bool, len(opts.Expect))
+	for _, k := range opts.Expect {
+		expect[k] = true
+	}
+
 	m := &model{
 		screen:   screen,
 		opts:     opts,
 		items:    items,
 		selected: map[int]bool{},
 		query:    []rune(opts.Query),
+		expect:   expect,
 	}
 	m.recompute()
 	m.refreshPreview()
@@ -82,9 +96,10 @@ type model struct {
 	items    []string
 	matches  []matcher.Match
 	query    []rune
-	cursor   int          // index into matches (0 = best match, at the top)
-	offset   int          // first visible match (scroll position)
-	selected map[int]bool // keyed by original item index
+	cursor   int             // index into matches (0 = best match, at the top)
+	offset   int             // first visible match (scroll position)
+	selected map[int]bool    // keyed by original item index
+	expect   map[string]bool // keys that accept and report themselves
 
 	previewGen   int
 	previewItem  string
@@ -101,7 +116,12 @@ type previewEvent struct {
 func (e *previewEvent) When() time.Time { return e.t }
 
 func (m *model) recompute() {
-	m.matches = matcher.Filter(m.items, string(m.query), true)
+	m.matches = matcher.Filter(m.items, string(m.query), matcher.Options{
+		Fuzzy:   m.opts.Fuzzy,
+		Case:    m.opts.Case,
+		Sort:    m.opts.Sort,
+		WithPos: true,
+	})
 	m.cursor = 0
 	m.offset = 0
 }
@@ -141,6 +161,7 @@ func (m *model) toggleSelect() {
 }
 
 func (m *model) accept() Result {
+	q := string(m.query)
 	if m.opts.Multi && len(m.selected) > 0 {
 		var out []string
 		for i := range m.items {
@@ -148,18 +169,27 @@ func (m *model) accept() Result {
 				out = append(out, m.items[i])
 			}
 		}
-		return Result{Selected: out}
+		return Result{Selected: out, Query: q}
 	}
 	if cur, ok := m.current(); ok {
-		return Result{Selected: []string{cur.Text}}
+		return Result{Selected: []string{cur.Text}, Query: q}
 	}
-	return Result{Aborted: true}
+	return Result{Aborted: true, Query: q}
 }
 
 func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
+	// Expect keys accept the selection and report which key was pressed.
+	if len(m.expect) > 0 {
+		if name := keyName(ev); name != "" && m.expect[name] {
+			r := m.accept()
+			r.Key = name
+			return true, r
+		}
+	}
+
 	switch ev.Key() {
 	case tcell.KeyEscape, tcell.KeyCtrlC:
-		return true, Result{Aborted: true}
+		return true, Result{Aborted: true, Query: string(m.query)}
 	case tcell.KeyEnter:
 		return true, m.accept()
 	case tcell.KeyCtrlU:
@@ -205,10 +235,7 @@ func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
 // listHeight returns the number of rows currently available for the list.
 func (m *model) listHeight() int {
 	_, h := m.screen.Size()
-	top := 2 // prompt + counter
-	if m.opts.Header != "" {
-		top++
-	}
+	top := 2 + len(m.opts.Header) // prompt + counter + header lines
 	if h-top < 1 {
 		return 1
 	}
@@ -256,9 +283,9 @@ func (m *model) draw() {
 	puts(s, 0, y, counter, counterStyle)
 	y++
 
-	// Optional header.
-	if m.opts.Header != "" {
-		puts(s, 0, y, truncate(m.opts.Header, listW), headerStyle)
+	// Optional header lines.
+	for _, hl := range m.opts.Header {
+		puts(s, 0, y, truncate(hl, listW), headerStyle)
 		y++
 	}
 
@@ -416,6 +443,33 @@ func truncate(s string, w int) string {
 
 func expandTabs(s string) string {
 	return strings.ReplaceAll(s, "\t", "    ")
+}
+
+// keyName returns a canonical name for a key event (e.g. "ctrl-y", "alt-x",
+// "f5", "enter") used to match against --expect keys. Returns "" if unnamed.
+func keyName(ev *tcell.EventKey) string {
+	k := ev.Key()
+	switch k {
+	case tcell.KeyEnter:
+		return "enter"
+	case tcell.KeyTab:
+		return "tab"
+	case tcell.KeyEsc:
+		return "esc"
+	}
+	if k >= tcell.KeyCtrlA && k <= tcell.KeyCtrlZ {
+		return fmt.Sprintf("ctrl-%c", 'a'+rune(k-tcell.KeyCtrlA))
+	}
+	if k >= tcell.KeyF1 && k <= tcell.KeyF12 {
+		return fmt.Sprintf("f%d", int(k-tcell.KeyF1)+1)
+	}
+	if k == tcell.KeyRune {
+		if ev.Modifiers()&tcell.ModAlt != 0 {
+			return "alt-" + string(unicode.ToLower(ev.Rune()))
+		}
+		return string(ev.Rune())
+	}
+	return ""
 }
 
 func deleteWord(q []rune) []rune {

@@ -128,20 +128,26 @@ matches:
 | --- | --- | --- | --- |
 | `foo` | fuzzy | `fbb` | `FooBarBaz` |
 | `'foo` | exact substring | `'bar` | `foo**bar**baz` |
+| `'foo'` | exact at word boundary | `'wild'` | `a **wild** thing` (not `wildcard`) |
 | `^foo` | prefix | `^main` | `main.go` |
 | `foo$` | suffix | `.go$` | `main.go` |
 | `^foo$` | exact equality | `^README.md$` | `README.md` |
 | `!foo` | inverse (must **not** match) | `!test` | excludes `main_test.go` |
+| `a \| b` | OR | `go$ \| rb$` | `main.go` **or** `app.rb` |
 
 The inverse marker combines with the others: `!^foo`, `!foo$`, `!'foo`.
 
 ```sh
 # files containing "main", but not "test"
 find . | sift --query 'main !test'
+
+# Go or Ruby files
+find . | sift --query 'go$ | rb$'
 ```
 
 Matching is case-insensitive unless a term contains an uppercase letter
-(*smart case*).
+(*smart case*). Override with `-i`/`+i`, or make terms exact by default with
+`-e`/`--exact`.
 
 ### Options
 
@@ -151,12 +157,29 @@ Matching is case-insensitive unless a term contains an uppercase letter
 | `-p`, `--prompt STR` | set the prompt (default `> `) |
 | `-m`, `--multi` | enable multi-select |
 | `--preview CMD` | run `CMD` for the highlighted item; `{}` is the item |
-| `--header STR` | show a fixed header line above the list |
+| `--header STR` | show fixed header line(s) above the list |
+| `--header-lines N` | treat the first N input lines as a sticky header |
+| `-e`, `--exact` | exact-match by default (`'` flips a term to fuzzy) |
+| `-i` / `+i` | force case-insensitive / case-sensitive matching |
+| `+s`, `--no-sort` | keep input order instead of ranking by score |
+| `--tac` | reverse the input order |
 | `-f`, `--filter STR` | non-interactive: print matches and exit |
-| `--read0` | read NUL-separated input |
+| `-1`, `--select-1` | if exactly one item matches, pick it without the UI |
+| `-0`, `--exit-0` | if nothing matches, exit immediately |
+| `--print-query` | print the final query as the first output line |
+| `--expect KEYS` | extra accept keys; prints which key was pressed first |
+| `--read0` / `--print0` | NUL-separated input / output |
 | `--bash` / `--zsh` / `--fish` | print the shell key-binding script |
 | `-V`, `--version` | print version |
 | `-h`, `--help` | show help |
+
+### Environment
+
+| Variable | Effect |
+| --- | --- |
+| `SIFT_DEFAULT_COMMAND` | command run to produce input when stdin is a terminal |
+| `SIFT_DEFAULT_OPTS` | default options prepended to every invocation |
+| `SIFT_CTRL_T_COMMAND` | command used by the CTRL-T key-binding |
 
 ### Keys
 

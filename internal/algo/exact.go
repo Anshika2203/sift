@@ -60,6 +60,42 @@ func ExactMatch(text string, pattern []rune, caseSensitive, withPos bool) (Resul
 	return score(target, cmp, pattern, best, best+m, withPos), true
 }
 
+// ExactBoundaryMatch finds pattern as a contiguous substring that sits at word
+// boundaries on both sides (e.g. 'wild' matches "a wild thing" but not
+// "wildcard"). Returns the highest-scoring such occurrence.
+func ExactBoundaryMatch(text string, pattern []rune, caseSensitive, withPos bool) (Result, bool) {
+	if len(pattern) == 0 {
+		return Result{}, true
+	}
+	target := []rune(text)
+	n, m := len(target), len(pattern)
+	if m > n {
+		return Result{}, false
+	}
+	cmp := lowerRunes(target, caseSensitive)
+
+	best, bestScore := -1, 0
+	for start := 0; start+m <= n; start++ {
+		if !equalAt(cmp, pattern, start) {
+			continue
+		}
+		// A boundary exists at the string edge or next to a non-word rune.
+		leftOK := start == 0 || classOf(target[start-1]) <= classDelim
+		rightOK := start+m == n || classOf(target[start+m]) <= classDelim
+		if !leftOK || !rightOK {
+			continue
+		}
+		r := score(target, cmp, pattern, start, start+m, false)
+		if best < 0 || r.Score > bestScore {
+			best, bestScore = start, r.Score
+		}
+	}
+	if best < 0 {
+		return Result{}, false
+	}
+	return score(target, cmp, pattern, best, best+m, withPos), true
+}
+
 // PrefixMatch reports whether text begins with pattern.
 func PrefixMatch(text string, pattern []rune, caseSensitive, withPos bool) (Result, bool) {
 	if len(pattern) == 0 {

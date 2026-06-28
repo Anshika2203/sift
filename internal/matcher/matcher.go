@@ -18,16 +18,20 @@ type Match struct {
 	Positions []int  // matched rune indices, for highlighting
 }
 
-// Filter ranks items against query and returns the matches, best score first.
-// An empty query returns every item in its original order. The query may use
-// sift's extended syntax (see the pattern package).
-//
-// withPos controls whether matched positions are computed (needed for the
-// interactive UI's highlighting, skippable for plain filter output).
-func Filter(items []string, query string, withPos bool) []Match {
-	p := pattern.Parse(query)
+// Options configures a filter pass.
+type Options struct {
+	Fuzzy   bool         // default term type fuzzy (true) or exact (--exact)
+	Case    pattern.Case // case-sensitivity policy
+	Sort    bool         // rank by score (false keeps input order, i.e. --no-sort)
+	WithPos bool         // compute matched positions (for UI highlighting)
+}
 
-	// Empty query: pass everything through unranked.
+// Filter ranks items against query and returns the matches. With Sort enabled
+// (and a sortable query) the best score comes first; otherwise input order is
+// preserved. An empty query returns every item in input order.
+func Filter(items []string, query string, opts Options) []Match {
+	p := pattern.Parse(query, pattern.Options{Fuzzy: opts.Fuzzy, Case: opts.Case})
+
 	if p.IsEmpty() {
 		out := make([]Match, len(items))
 		for i, t := range items {
@@ -36,8 +40,6 @@ func Filter(items []string, query string, withPos bool) []Match {
 		return out
 	}
 
-	// Fan the work out across CPUs: each worker scans a contiguous slice of the
-	// input and produces its own matches, which we merge afterwards.
 	workers := runtime.NumCPU()
 	if workers > len(items) {
 		workers = len(items)
@@ -64,7 +66,7 @@ func Filter(items []string, query string, withPos bool) []Match {
 			defer wg.Done()
 			var local []Match
 			for i := start; i < end; i++ {
-				if sc, pos, ok := p.Match(items[i], withPos); ok {
+				if sc, pos, ok := p.Match(items[i], opts.WithPos); ok {
 					local = append(local, Match{
 						Index:     i,
 						Text:      items[i],
@@ -83,10 +85,10 @@ func Filter(items []string, query string, withPos bool) []Match {
 		matches = append(matches, pr...)
 	}
 
-	// Rank by score (then shorter item, then input order). When the query is all
-	// inverse terms there is nothing to rank by, so we keep input order, which
-	// the worker layout already preserves.
-	if p.Sortable() {
+	// Rank by score (then shorter item, then input order). Skipped when sorting
+	// is disabled or the query is all-inverse; the worker layout already yields
+	// ascending input order.
+	if opts.Sort && p.Sortable() {
 		sort.SliceStable(matches, func(a, b int) bool {
 			ma, mb := matches[a], matches[b]
 			if ma.Score != mb.Score {

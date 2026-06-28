@@ -1,19 +1,23 @@
 // Package pattern parses sift's extended search syntax and evaluates it against
 // items.
 //
-// A query is split on spaces into terms that are ANDed together: an item must
-// satisfy every term. A leading or trailing marker changes how a term matches:
+// A query is split on spaces into terms. Terms are ANDed together (an item must
+// satisfy every term), except that consecutive terms joined by a bare "|" form
+// an OR group ("term set") — the set is satisfied if any of its terms match.
+// Markers change how a term matches:
 //
 //	foo      fuzzy match (the default)
 //	'foo     exact substring match
+//	'foo'    exact match at word boundaries
 //	^foo     prefix match
 //	foo$     suffix match
 //	^foo$    exact equality
 //	!foo     inverse: the item must NOT contain foo
+//	a | b    OR: matches a or b
 //
-// The inverse marker combines with the others: !^foo, !foo$, !'foo. Matching is
-// case-insensitive for a term unless that term contains an uppercase letter
-// ("smart case").
+// The inverse marker combines with the others: !^foo, !foo$, !'foo. With
+// --exact the default flips: bare terms become exact and 'foo becomes fuzzy.
+// Case sensitivity follows the Case option (smart case by default).
 package pattern
 
 import (
@@ -23,11 +27,27 @@ import (
 	"github.com/Anshika2203/sift/internal/algo"
 )
 
+// Case controls case sensitivity.
+type Case int
+
+const (
+	CaseSmart   Case = iota // case-insensitive unless the term has an uppercase letter
+	CaseIgnore              // always case-insensitive
+	CaseRespect             // always case-sensitive
+)
+
+// Options configures how a query string is parsed.
+type Options struct {
+	Fuzzy bool // default term type is fuzzy (true) or exact (false, i.e. --exact)
+	Case  Case
+}
+
 type termType int
 
 const (
 	termFuzzy termType = iota
 	termExact
+	termBoundary
 	termPrefix
 	termSuffix
 	termEqual
@@ -42,10 +62,10 @@ type term struct {
 	fn            matchFunc
 }
 
-// Pattern is a parsed query.
+// Pattern is a parsed query: an AND of term sets, each an OR of terms.
 type Pattern struct {
-	terms    []term
-	sortable bool // false when every term is inverse (nothing to rank by)
+	termSets [][]term
+	sortable bool
 	empty    bool
 }
 
@@ -53,6 +73,8 @@ func fnFor(t termType) matchFunc {
 	switch t {
 	case termExact:
 		return algo.ExactMatch
+	case termBoundary:
+		return algo.ExactBoundaryMatch
 	case termPrefix:
 		return algo.PrefixMatch
 	case termSuffix:
@@ -65,73 +87,110 @@ func fnFor(t termType) matchFunc {
 }
 
 // Parse builds a Pattern from a raw query string.
-func Parse(query string) *Pattern {
-	fields := strings.Fields(query)
+func Parse(query string, opts Options) *Pattern {
+	tokens := strings.Fields(query)
 	p := &Pattern{}
-	if len(fields) == 0 {
-		p.empty = true
-		return p
-	}
 
-	for _, tok := range fields {
-		typ := termFuzzy
-		inv := false
-		text := tok
+	var set []term
+	switchSet := false // next term starts a new set
+	afterBar := false  // previous token was "|", so the next term joins this set
 
-		// Inverse marker. After stripping "!", the remaining markers still apply
-		// (so "!^foo" is an inverse prefix match).
-		if strings.HasPrefix(text, "!") {
-			inv = true
-			typ = termExact // a bare "!foo" is an inverse exact-substring term
-			text = text[1:]
-		}
-		if text == "" {
+	for _, tok := range tokens {
+		if len(set) > 0 && !afterBar && tok == "|" {
+			switchSet = false
+			afterBar = true
 			continue
 		}
+		afterBar = false
 
-		hasCaret := strings.HasPrefix(text, "^")
-		hasDollar := strings.HasSuffix(text, "$") && text != "$"
-		switch {
-		case hasCaret && hasDollar:
-			typ = termEqual
-			text = text[1 : len(text)-1]
-		case hasCaret:
-			typ = termPrefix
-			text = text[1:]
-		case hasDollar:
-			typ = termSuffix
-			text = text[:len(text)-1]
-		case strings.HasPrefix(text, "'"):
-			typ = termExact
-			text = text[1:]
-		}
-		if text == "" {
+		t, ok := parseTerm(tok, opts)
+		if !ok {
 			continue
 		}
-
-		caseSensitive := hasUpper(text)
-		runes := []rune(text)
-		if !caseSensitive {
-			for i, r := range runes {
-				runes[i] = toLower(r)
-			}
+		if switchSet {
+			p.termSets = append(p.termSets, set)
+			set = nil
 		}
-
-		p.terms = append(p.terms, term{
-			inv:           inv,
-			caseSensitive: caseSensitive,
-			text:          runes,
-			fn:            fnFor(typ),
-		})
-		if !inv {
+		set = append(set, t)
+		switchSet = true
+		if !t.inv {
 			p.sortable = true
 		}
 	}
-
-	if len(p.terms) == 0 {
+	if len(set) > 0 {
+		p.termSets = append(p.termSets, set)
+	}
+	if len(p.termSets) == 0 {
 		p.empty = true
 	}
 	return p
+}
+
+func parseTerm(tok string, opts Options) (term, bool) {
+	typ := termFuzzy
+	if !opts.Fuzzy {
+		typ = termExact
+	}
+	inv := false
+	text := tok
+
+	if strings.HasPrefix(text, "!") {
+		inv = true
+		typ = termExact
+		text = text[1:]
+	}
+	if text == "" {
+		return term{}, false
+	}
+
+	// Suffix marker (but a lone "$" is a literal).
+	if text != "$" && strings.HasSuffix(text, "$") {
+		typ = termSuffix
+		text = text[:len(text)-1]
+	}
+
+	switch {
+	case len(text) >= 2 && strings.HasPrefix(text, "'") && strings.HasSuffix(text, "'"):
+		typ = termBoundary
+		text = text[1 : len(text)-1]
+	case strings.HasPrefix(text, "'"):
+		// A leading quote flips exactness.
+		if opts.Fuzzy && !inv {
+			typ = termExact
+		} else {
+			typ = termFuzzy
+		}
+		text = text[1:]
+	case strings.HasPrefix(text, "^"):
+		if typ == termSuffix {
+			typ = termEqual
+		} else {
+			typ = termPrefix
+		}
+		text = text[1:]
+	}
+
+	if text == "" {
+		return term{}, false
+	}
+
+	caseSensitive := false
+	switch opts.Case {
+	case CaseRespect:
+		caseSensitive = true
+	case CaseIgnore:
+		caseSensitive = false
+	default:
+		caseSensitive = hasUpper(text)
+	}
+
+	runes := []rune(text)
+	if !caseSensitive {
+		for i, r := range runes {
+			runes[i] = toLower(r)
+		}
+	}
+	return term{inv: inv, caseSensitive: caseSensitive, text: runes, fn: fnFor(typ)}, true
 }
 
 // IsEmpty reports whether the pattern has no terms (and so matches everything).
@@ -149,20 +208,37 @@ func (p *Pattern) Match(text string, withPos bool) (int, []int, bool) {
 	}
 	total := 0
 	var positions []int
-	for _, t := range p.terms {
-		res, ok := t.fn(text, t.text, t.caseSensitive, withPos)
-		if t.inv {
+
+	for _, set := range p.termSets {
+		matched := false
+		setScore := 0
+		var setPos []int
+
+		for _, t := range set {
+			res, ok := t.fn(text, t.text, t.caseSensitive, withPos)
 			if ok {
-				return 0, nil, false // a forbidden term matched
+				if t.inv {
+					continue // a forbidden term matched; this term can't satisfy the set
+				}
+				matched = true
+				setScore = res.Score
+				if withPos {
+					setPos = res.Positions
+				}
+				break
+			} else if t.inv {
+				matched = true // inverse term absent -> set satisfied
+				setScore = 0
+				setPos = nil
+				continue
 			}
-			continue
 		}
-		if !ok {
+		if !matched {
 			return 0, nil, false
 		}
-		total += res.Score
-		if withPos && len(res.Positions) > 0 {
-			positions = append(positions, res.Positions...)
+		total += setScore
+		if withPos && len(setPos) > 0 {
+			positions = append(positions, setPos...)
 		}
 	}
 	return total, positions, true

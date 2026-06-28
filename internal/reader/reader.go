@@ -6,7 +6,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"golang.org/x/term"
@@ -15,16 +17,39 @@ import (
 // Read returns the items to search.
 //
 //   - If something is piped into standard input, each line becomes an item.
-//   - Otherwise (stdin is an interactive terminal), sift walks the current
-//     directory and lists files, mirroring fzf's default behaviour.
+//   - Otherwise (stdin is an interactive terminal), sift runs the command in
+//     $SIFT_DEFAULT_COMMAND if set, else walks the current directory listing
+//     files (mirroring fzf's default behaviour).
 //
 // nul selects NUL ('\0') instead of newline as the line delimiter, for inputs
 // produced by tools like `find -print0`.
 func Read(nul bool) ([]string, error) {
 	if term.IsTerminal(int(os.Stdin.Fd())) {
+		if cmd := os.Getenv("SIFT_DEFAULT_COMMAND"); strings.TrimSpace(cmd) != "" {
+			return readCommand(cmd, nul)
+		}
 		return walkFiles(".")
 	}
 	return readLines(os.Stdin, nul)
+}
+
+func readCommand(command string, nul bool) ([]string, error) {
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		c = exec.Command("cmd", "/c", command)
+	} else {
+		c = exec.Command("sh", "-c", command)
+	}
+	out, err := c.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Start(); err != nil {
+		return nil, err
+	}
+	items, _ := readLines(out, nul)
+	_ = c.Wait()
+	return items, nil
 }
 
 func readLines(r io.Reader, nul bool) ([]string, error) {
