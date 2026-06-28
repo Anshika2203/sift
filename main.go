@@ -20,7 +20,7 @@ import (
 	"github.com/Anshika2203/sift/internal/ui"
 )
 
-const version = "0.3.0"
+const version = "0.3.1"
 
 //go:embed shell/key-bindings.bash
 var bashBindings string
