@@ -201,6 +201,14 @@ Position and size it with `--preview-window` (e.g. `up,40%`, `left,60%`,
 | `--preview CMD` | run `CMD` for the highlighted item (see placeholders below) |
 | `--preview-window S` | `[up\|down\|left\|right][,SIZE[%]][,hidden]` (default `right,50%`) |
 | `--ansi` | parse ANSI color codes in the input |
+| `--layout L` | `reverse` (top-down, default) or `default` (bottom-up) |
+| `--reverse` | shorthand for `--layout reverse` |
+| `--cycle` | wrap-around cursor movement |
+| `--no-mouse` | disable mouse (wheel + click are on by default) |
+| `--color SPEC` | theme, e.g. `prompt:cyan,hl:green,pointer:red` |
+| `--history FILE` | load/save query history (<kbd>Ctrl-P</kbd>/<kbd>Ctrl-N</kbd>) |
+| `--border[=STYLE]` | draw a border (`rounded`, `sharp`, …) |
+| `--margin TRBL` / `--padding TRBL` | space outside / inside the border |
 | `--header STR` | show fixed header line(s) above the list |
 | `--header-lines N` | treat the first N input lines as a sticky header |
 | `-e`, `--exact` | exact-match by default (`'` flips a term to fuzzy) |
@@ -260,6 +268,11 @@ eval "$(sift --zsh)"
 # fish — in ~/.config/fish/config.fish
 sift --fish | source
 ```
+
+The bash and zsh scripts also enable **fuzzy completion**: type the trigger
+`**` and press <kbd>Tab</kbd> to complete paths, e.g. `vim **<Tab>` or
+`cd **<Tab>`. Customise with `SIFT_COMPLETION_TRIGGER` and
+`SIFT_COMPLETION_COMMAND`.
 
 ## How it works
 

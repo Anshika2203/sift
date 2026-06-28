@@ -20,7 +20,7 @@ import (
 	"github.com/Anshika2203/sift/internal/ui"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 //go:embed shell/key-bindings.bash
 var bashBindings string
@@ -30,6 +30,12 @@ var zshBindings string
 
 //go:embed shell/key-bindings.fish
 var fishBindings string
+
+//go:embed shell/completion.bash
+var bashCompletion string
+
+//go:embed shell/completion.zsh
+var zshCompletion string
 
 const usage = `sift ` + version + ` - a command-line fuzzy finder
 
@@ -61,6 +67,15 @@ Interface:
       --preview CMD      run CMD for the highlighted item; {} {q} {n} {1} {+}
       --preview-window S layout: [up|down|left|right][,SIZE[%]][,hidden]
       --ansi             parse ANSI color codes in the input
+      --layout L         "default" (bottom-up) or "reverse" (top-down, default)
+      --reverse          shorthand for --layout reverse
+      --cycle            wrap-around cursor movement
+      --no-mouse         disable mouse
+      --color SPEC       theme, e.g. "prompt:cyan,hl:green,pointer:red"
+      --history FILE     load/save query history (Ctrl-P / Ctrl-N to navigate)
+      --border[=STYLE]   draw a border (rounded, sharp, ...)
+      --margin TRBL      empty space outside the finder
+      --padding TRBL     empty space inside the border
       --header STR       fixed header line(s) shown above the list
       --header-lines N   treat the first N input lines as a sticky header
 
@@ -121,6 +136,14 @@ type config struct {
 	hasWithNth  bool
 	ansi        bool
 	previewWin  string
+	reverse     bool
+	cycle       bool
+	mouse       bool
+	color       string
+	history     string
+	margin      string
+	padding     string
+	border      string
 }
 
 func parseTiebreak(spec string) ([]matcher.Tiebreak, error) {
@@ -201,7 +224,7 @@ func splitArgs(s string) []string {
 }
 
 func parseArgs(args []string) (config, error) {
-	c := config{prompt: "> ", caseMode: pattern.CaseSmart, algoV2: true, delim: tokenizer.NewDelimiter("")}
+	c := config{prompt: "> ", caseMode: pattern.CaseSmart, algoV2: true, delim: tokenizer.NewDelimiter(""), reverse: true, mouse: true}
 	next := func(i *int, flag string) (string, error) {
 		if *i+1 >= len(args) {
 			return "", fmt.Errorf("missing value for %s", flag)
@@ -226,6 +249,40 @@ func parseArgs(args []string) (config, error) {
 			c.previewWin, err = next(&i, a)
 		case "--ansi":
 			c.ansi = true
+		case "--layout":
+			if v, err = next(&i, a); err == nil {
+				switch v {
+				case "default":
+					c.reverse = false
+				case "reverse", "reverse-list":
+					c.reverse = true
+				default:
+					err = fmt.Errorf("invalid --layout: %q", v)
+				}
+			}
+		case "--reverse":
+			c.reverse = true
+		case "--no-reverse":
+			c.reverse = false
+		case "--cycle":
+			c.cycle = true
+		case "--no-mouse":
+			c.mouse = false
+		case "--color":
+			c.color, err = next(&i, a)
+		case "--history":
+			c.history, err = next(&i, a)
+		case "--margin":
+			c.margin, err = next(&i, a)
+		case "--padding":
+			c.padding, err = next(&i, a)
+		case "--border":
+			// optional value; if the next arg looks like a value, consume it
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				c.border, err = next(&i, a)
+			} else {
+				c.border = "rounded"
+			}
 		case "--header":
 			c.header, err = next(&i, a)
 		case "--header-lines":
@@ -312,9 +369,13 @@ func parseArgs(args []string) (config, error) {
 			os.Exit(0)
 		case "--bash":
 			fmt.Println(strings.TrimSpace(bashBindings))
+			fmt.Println()
+			fmt.Println(strings.TrimSpace(bashCompletion))
 			os.Exit(0)
 		case "--zsh":
 			fmt.Println(strings.TrimSpace(zshBindings))
+			fmt.Println()
+			fmt.Println(strings.TrimSpace(zshCompletion))
 			os.Exit(0)
 		case "--fish":
 			fmt.Println(strings.TrimSpace(fishBindings))
@@ -471,6 +532,14 @@ func main() {
 		HasWithNth:    cfg.hasWithNth,
 		PreviewWindow: cfg.previewWin,
 		Colors:        colors,
+		Reverse:       cfg.reverse,
+		Cycle:         cfg.cycle,
+		Mouse:         cfg.mouse,
+		Color:         cfg.color,
+		History:       cfg.history,
+		Margin:        cfg.margin,
+		Padding:       cfg.padding,
+		Border:        cfg.border,
 	})
 	if err != nil {
 		fail(err)

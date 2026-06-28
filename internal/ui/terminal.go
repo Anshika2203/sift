@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -41,6 +42,15 @@ type Options struct {
 
 	PreviewWindow string        // e.g. "right,50%", "up,40%", "hidden"
 	Colors        [][]ansi.Span // per-item ANSI styling (--ansi), indexed by item index
+
+	Reverse bool   // top-down layout (prompt at top); false = bottom-up
+	Cycle   bool   // wrap-around cursor movement
+	Mouse   bool   // enable mouse (wheel scroll, click to select)
+	Color   string // --color theme overrides, e.g. "prompt:cyan,hl:green"
+	History string // path to a query-history file
+	Margin  string // empty space outside the finder: "T,R,B,L" forms
+	Padding string // empty space inside the border
+	Border  string // border style: "", "none", "rounded", "sharp", ...
 }
 
 // Result is what the user picked.
@@ -74,6 +84,10 @@ func Run(items []string, opts Options) (Result, error) {
 
 	pv, hidden := parsePreviewWindow(opts.PreviewWindow)
 
+	if opts.Mouse {
+		screen.EnableMouse()
+	}
+
 	m := &model{
 		screen:        screen,
 		opts:          opts,
@@ -83,7 +97,21 @@ func Run(items []string, opts Options) (Result, error) {
 		expect:        expect,
 		pv:            pv,
 		previewHidden: hidden,
+		theme:         parseTheme(opts.Color),
+		reverse:       opts.Reverse,
+		histFile:      opts.History,
+		margin:        parseInsets(opts.Margin),
+		padding:       parseInsets(opts.Padding),
 	}
+	switch strings.ToLower(opts.Border) {
+	case "", "none":
+		m.border = false
+	case "sharp", "bold", "double", "block":
+		m.border, m.borderRound = true, false
+	default: // rounded and anything else
+		m.border, m.borderRound = true, true
+	}
+	m.loadHistory()
 	m.recompute()
 	m.refreshPreview()
 	m.draw()
@@ -98,8 +126,13 @@ func Run(items []string, opts Options) (Result, error) {
 				m.previewLines = ev.lines
 				m.draw()
 			}
+		case *tcell.EventMouse:
+			if m.handleMouse(ev) {
+				m.draw()
+			}
 		case *tcell.EventKey:
 			if done, res := m.handleKey(ev); done {
+				m.saveHistory(res.Query)
 				return res, nil
 			}
 			m.draw()
@@ -133,6 +166,39 @@ type model struct {
 	previewKey    string // last expanded preview command (cache guard)
 	previewLines  []string
 	previewOffset int
+
+	theme   theme
+	reverse bool
+
+	history  []string
+	histIdx  int
+	histFile string
+
+	// list geometry from the last render, for mapping mouse clicks to items
+	geoLx, geoListRows, geoListY0, geoListBottom int
+	geoReverse                                   bool
+
+	margin      [4]int // top, right, bottom, left
+	padding     [4]int
+	border      bool
+	borderRound bool
+}
+
+// theme holds the foreground colors for UI elements (overridable via --color).
+type theme struct {
+	prompt, pointer, marker, info, header, hl, fg tcell.Color
+}
+
+func defaultTheme() theme {
+	return theme{
+		prompt:  tcell.ColorAqua,
+		pointer: tcell.ColorRed,
+		marker:  tcell.ColorYellow,
+		info:    tcell.ColorGray,
+		header:  tcell.ColorPurple,
+		hl:      tcell.ColorGreen,
+		fg:      tcell.ColorDefault,
+	}
 }
 
 // previewEvent carries asynchronous preview output back to the event loop.
@@ -170,16 +236,21 @@ func (m *model) current() (matcher.Match, bool) {
 }
 
 func (m *model) move(delta int) {
-	if len(m.matches) == 0 {
+	n := len(m.matches)
+	if n == 0 {
 		return
 	}
 	old := m.cursor
 	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	if m.cursor >= len(m.matches) {
-		m.cursor = len(m.matches) - 1
+	if m.opts.Cycle {
+		m.cursor = ((m.cursor % n) + n) % n
+	} else {
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		if m.cursor >= n {
+			m.cursor = n - 1
+		}
 	}
 	if m.cursor != old {
 		m.refreshPreview()
@@ -264,6 +335,19 @@ func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
 		}
 	}
 
+	// With --history, Ctrl-P/Ctrl-N navigate the query history instead of the
+	// list (the arrow keys still move the list).
+	if m.histFile != "" {
+		switch ev.Key() {
+		case tcell.KeyCtrlP:
+			m.historyPrev()
+			return false, Result{}
+		case tcell.KeyCtrlN:
+			m.historyNext()
+			return false, Result{}
+		}
+	}
+
 	switch ev.Key() {
 	case tcell.KeyEscape, tcell.KeyCtrlC:
 		return true, Result{Aborted: true, Query: string(m.query)}
@@ -342,32 +426,48 @@ func (m *model) previewSize(total int) int {
 func (m *model) draw() {
 	s := m.screen
 	s.Clear()
-	w, h := s.Size()
+	sw, sh := s.Size()
+
+	// Inset the drawing area: margin (outside), then border, then padding.
+	ix, iy, iw, ih := m.margin[3], m.margin[0], sw-m.margin[1]-m.margin[3], sh-m.margin[0]-m.margin[2]
+	if m.border {
+		drawBorder(s, ix, iy, iw, ih, m.borderRound)
+		ix, iy, iw, ih = ix+1, iy+1, iw-2, ih-2
+	}
+	ix, iy = ix+m.padding[3], iy+m.padding[0]
+	iw, ih = iw-m.padding[1]-m.padding[3], ih-m.padding[0]-m.padding[2]
+	if iw < 1 {
+		iw = 1
+	}
+	if ih < 1 {
+		ih = 1
+	}
 
 	showPreview := m.opts.Preview != "" && !m.previewHidden
-	lx, ly, lw, lh := 0, 0, w, h
+	lx, ly, lw, lh := ix, iy, iw, ih
 	px, py, pw, ph := 0, 0, 0, 0
-	sepPos, sepHoriz := -1, false
+	sepPos, sepHoriz, hasSep := -1, false, false
 
 	if showPreview {
 		switch m.pv.pos {
 		case "left", "right":
-			pwd := m.previewSize(w)
-			pw, ph = pwd, h
+			pwd := m.previewSize(iw)
+			pw, ph = pwd, ih
 			if m.pv.pos == "right" {
-				px, lw, sepPos = w-pwd, w-pwd-1, w-pwd-1
+				px, py, lw, sepPos = ix+iw-pwd, iy, iw-pwd-1, ix+iw-pwd-1
 			} else {
-				px, lx, lw, sepPos = 0, pwd+1, w-pwd-1, pwd
+				px, py, lx, lw, sepPos = ix, iy, ix+pwd+1, iw-pwd-1, ix+pwd
 			}
 		default: // up / down
-			phd := m.previewSize(h)
-			pw, ph, sepHoriz = w, phd, true
+			phd := m.previewSize(ih)
+			pw, ph, sepHoriz = iw, phd, true
 			if m.pv.pos == "up" {
-				py, ly, lh, sepPos = 0, phd+1, h-phd-1, phd
+				px, py, ly, lh, sepPos = ix, iy, iy+phd+1, ih-phd-1, iy+phd
 			} else {
-				py, lh, sepPos = h-phd, h-phd-1, h-phd-1
+				px, py, lh, sepPos = ix, iy+ih-phd, ih-phd-1, iy+ih-phd-1
 			}
 		}
+		hasSep = true
 		if lw < 1 {
 			lw = 1
 		}
@@ -380,12 +480,12 @@ func (m *model) draw() {
 	if showPreview {
 		m.renderPreview(px, py, pw, ph)
 		sepStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
-		if sepHoriz {
-			for x := 0; x < w; x++ {
+		if hasSep && sepHoriz {
+			for x := ix; x < ix+iw; x++ {
 				s.SetContent(x, sepPos, '─', nil, sepStyle)
 			}
-		} else {
-			for y := 0; y < h; y++ {
+		} else if hasSep {
+			for y := iy; y < iy+ih; y++ {
 				s.SetContent(sepPos, y, '│', nil, sepStyle)
 			}
 		}
@@ -393,43 +493,105 @@ func (m *model) draw() {
 	s.Show()
 }
 
+func drawBorder(s tcell.Screen, x, y, w, h int, round bool) {
+	if w < 2 || h < 2 {
+		return
+	}
+	st := tcell.StyleDefault.Foreground(tcell.ColorGray)
+	tl, tr, bl, br := '┌', '┐', '└', '┘'
+	if round {
+		tl, tr, bl, br = '╭', '╮', '╰', '╯'
+	}
+	for i := 1; i < w-1; i++ {
+		s.SetContent(x+i, y, '─', nil, st)
+		s.SetContent(x+i, y+h-1, '─', nil, st)
+	}
+	for j := 1; j < h-1; j++ {
+		s.SetContent(x, y+j, '│', nil, st)
+		s.SetContent(x+w-1, y+j, '│', nil, st)
+	}
+	s.SetContent(x, y, tl, nil, st)
+	s.SetContent(x+w-1, y, tr, nil, st)
+	s.SetContent(x, y+h-1, bl, nil, st)
+	s.SetContent(x+w-1, y+h-1, br, nil, st)
+}
+
+// parseInsets parses a margin/padding spec: "T,R,B,L", "T,RL", "TB,RL", or a
+// single value applied to all sides. Non-numeric or empty values yield zeros.
+func parseInsets(spec string) [4]int {
+	var out [4]int
+	if strings.TrimSpace(spec) == "" {
+		return out
+	}
+	var v []int
+	for _, p := range strings.Split(spec, ",") {
+		n, _ := atoiPos(strings.TrimSpace(strings.TrimSuffix(p, "%")))
+		v = append(v, n)
+	}
+	switch len(v) {
+	case 1:
+		out = [4]int{v[0], v[0], v[0], v[0]}
+	case 2:
+		out = [4]int{v[0], v[1], v[0], v[1]}
+	case 3:
+		out = [4]int{v[0], v[1], v[2], v[1]}
+	default:
+		out = [4]int{v[0], v[1], v[2], v[3]}
+	}
+	return out
+}
+
 func (m *model) renderFinder(lx, ly, lw, lh int) {
 	s := m.screen
-	var (
-		promptStyle  = tcell.StyleDefault.Foreground(tcell.ColorAqua)
-		counterStyle = tcell.StyleDefault.Foreground(tcell.ColorGray)
-		pointerStyle = tcell.StyleDefault.Foreground(tcell.ColorRed).Bold(true)
-		matchStyle   = tcell.StyleDefault.Foreground(tcell.ColorGreen).Bold(true)
-		selStyle     = tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true)
-		headerStyle  = tcell.StyleDefault.Foreground(tcell.ColorPurple)
-	)
+	th := m.theme
+	promptStyle := tcell.StyleDefault.Foreground(th.prompt)
+	counterStyle := tcell.StyleDefault.Foreground(th.info)
+	pointerStyle := tcell.StyleDefault.Foreground(th.pointer).Bold(true)
+	matchStyle := tcell.StyleDefault.Foreground(th.hl).Bold(true)
+	selStyle := tcell.StyleDefault.Foreground(th.marker).Bold(true)
+	headerStyle := tcell.StyleDefault.Foreground(th.header)
+	textStyle := tcell.StyleDefault
+	if th.fg != tcell.ColorDefault {
+		textStyle = textStyle.Foreground(th.fg)
+	}
 
-	y := ly
-	x := puts(s, lx, y, m.opts.Prompt, promptStyle)
-	x = putsClip(s, x, y, string(m.query), tcell.StyleDefault, lx+lw)
+	nHeader := len(m.opts.Header)
+	listRows := lh - 2 - nHeader
+	if listRows < 0 {
+		listRows = 0
+	}
+
+	// Row positions depend on the layout. reverse = prompt at top; otherwise
+	// (default) prompt at the bottom with the best match nearest it.
+	var promptY, counterY, headerY0, listTop int
+	rowOf := func(row int) int { return listTop + row } // index offset -> screen row
+	if m.reverse {
+		promptY, counterY, headerY0, listTop = ly, ly+1, ly+2, ly+2+nHeader
+	} else {
+		promptY = ly + lh - 1
+		counterY = ly + lh - 2
+		headerY0 = ly + lh - 2 - nHeader
+		listBottom := ly + lh - 3 - nHeader
+		rowOf = func(row int) int { return listBottom - row }
+	}
+
+	x := puts(s, lx, promptY, m.opts.Prompt, promptStyle)
+	x = putsClip(s, x, promptY, string(m.query), textStyle, lx+lw)
 	if x > lx+lw-1 {
 		x = lx + lw - 1
 	}
-	s.ShowCursor(x, y)
-	y++
+	s.ShowCursor(x, promptY)
 
 	counter := fmt.Sprintf("  %d/%d", len(m.matches), len(m.items))
 	if m.opts.Multi && len(m.selected) > 0 {
 		counter += fmt.Sprintf(" (%d selected)", len(m.selected))
 	}
-	puts(s, lx, y, truncate(counter, lw), counterStyle)
-	y++
+	puts(s, lx, counterY, truncate(counter, lw), counterStyle)
 
-	for _, hl := range m.opts.Header {
-		puts(s, lx, y, truncate(hl, lw), headerStyle)
-		y++
+	for k, hl := range m.opts.Header {
+		puts(s, lx, headerY0+k, truncate(hl, lw), headerStyle)
 	}
 
-	listTop := y
-	listRows := ly + lh - listTop
-	if listRows < 0 {
-		listRows = 0
-	}
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}
@@ -446,14 +608,14 @@ func (m *model) renderFinder(lx, ly, lw, lh int) {
 			break
 		}
 		mt := m.matches[idx]
-		yy := listTop + row
+		yy := rowOf(row)
 		if idx == m.cursor {
 			puts(s, lx, yy, ">", pointerStyle)
 		}
 		if m.opts.Multi && m.selected[mt.Index] {
 			puts(s, lx+1, yy, "+", selStyle)
 		}
-		base := tcell.StyleDefault
+		base := textStyle
 		if idx == m.cursor {
 			base = base.Bold(true)
 		}
@@ -462,6 +624,14 @@ func (m *model) renderFinder(lx, ly, lw, lh int) {
 			spans = m.opts.Colors[mt.Index]
 		}
 		drawMatch(s, lx+2, yy, lw-2, mt, spans, base, matchStyle)
+	}
+
+	// Record geometry so mouse clicks can be mapped back to list indices.
+	m.geoLx, m.geoListRows, m.geoReverse = lx, listRows, m.reverse
+	if m.reverse {
+		m.geoListY0 = listTop
+	} else {
+		m.geoListBottom = ly + lh - 3 - nHeader
 	}
 }
 
@@ -534,6 +704,154 @@ func (m *model) expandPreview(cur matcher.Match) string {
 			return tok
 		}
 	})
+}
+
+// --- mouse ---
+
+func (m *model) handleMouse(ev *tcell.EventMouse) bool {
+	switch ev.Buttons() {
+	case tcell.WheelUp:
+		m.move(-3)
+		return true
+	case tcell.WheelDown:
+		m.move(3)
+		return true
+	case tcell.Button1:
+		_, y := ev.Position()
+		if idx, ok := m.indexAt(y); ok && idx != m.cursor {
+			m.cursor = idx
+			m.refreshPreview()
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) indexAt(y int) (int, bool) {
+	rel := y - m.geoListY0
+	if !m.geoReverse {
+		rel = m.geoListBottom - y
+	}
+	if rel < 0 || rel >= m.geoListRows {
+		return 0, false
+	}
+	idx := m.offset + rel
+	if idx < 0 || idx >= len(m.matches) {
+		return 0, false
+	}
+	return idx, true
+}
+
+// --- history ---
+
+func (m *model) loadHistory() {
+	if m.histFile == "" {
+		return
+	}
+	if data, err := os.ReadFile(m.histFile); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line != "" {
+				m.history = append(m.history, line)
+			}
+		}
+	}
+	m.histIdx = len(m.history)
+}
+
+func (m *model) historyPrev() {
+	if m.histIdx > 0 {
+		m.histIdx--
+		m.query = []rune(m.history[m.histIdx])
+		m.recompute()
+		m.refreshPreview()
+	}
+}
+
+func (m *model) historyNext() {
+	if m.histIdx < len(m.history)-1 {
+		m.histIdx++
+		m.query = []rune(m.history[m.histIdx])
+	} else {
+		m.histIdx = len(m.history)
+		m.query = nil
+	}
+	m.recompute()
+	m.refreshPreview()
+}
+
+func (m *model) saveHistory(q string) {
+	if m.histFile == "" || q == "" {
+		return
+	}
+	if n := len(m.history); n > 0 && m.history[n-1] == q {
+		return
+	}
+	f, err := os.OpenFile(m.histFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(q + "\n")
+}
+
+// --- theme ---
+
+func parseTheme(spec string) theme {
+	th := defaultTheme()
+	for _, part := range strings.Split(spec, ",") {
+		kv := strings.SplitN(strings.TrimSpace(part), ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		col, ok := colorByName(kv[1])
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(kv[0]) {
+		case "prompt":
+			th.prompt = col
+		case "pointer":
+			th.pointer = col
+		case "marker":
+			th.marker = col
+		case "info":
+			th.info = col
+		case "header":
+			th.header = col
+		case "hl", "hl+":
+			th.hl = col
+		case "fg", "fg+":
+			th.fg = col
+		}
+	}
+	return th
+}
+
+func colorByName(s string) (tcell.Color, bool) {
+	switch strings.ToLower(s) {
+	case "black":
+		return tcell.PaletteColor(0), true
+	case "red":
+		return tcell.PaletteColor(1), true
+	case "green":
+		return tcell.PaletteColor(2), true
+	case "yellow":
+		return tcell.PaletteColor(3), true
+	case "blue":
+		return tcell.PaletteColor(4), true
+	case "magenta":
+		return tcell.PaletteColor(5), true
+	case "cyan":
+		return tcell.PaletteColor(6), true
+	case "white":
+		return tcell.PaletteColor(7), true
+	case "default":
+		return tcell.ColorDefault, true
+	}
+	if n, ok := atoiPos(s); ok {
+		return tcell.PaletteColor(n), true
+	}
+	return tcell.ColorDefault, false
 }
 
 // --- small helpers ---
