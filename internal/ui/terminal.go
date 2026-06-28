@@ -4,7 +4,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -859,17 +858,6 @@ func colorByName(s string) (tcell.Color, bool) {
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
-
-func runShell(cmd string) string {
-	var c *exec.Cmd
-	if runtime.GOOS == "windows" {
-		c = exec.Command("cmd", "/c", cmd)
-	} else {
-		c = exec.Command("sh", "-c", cmd)
-	}
-	out, _ := c.CombinedOutput()
-	return string(out)
-}
 
 func shellQuote(s string) string {
 	if runtime.GOOS == "windows" {
