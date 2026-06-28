@@ -1,0 +1,85 @@
+# GoReleaser configuration for sift.
+# This is what produces cross-platform binaries and the artifacts that package
+# managers (Homebrew, Scoop, deb/rpm, etc.) consume on every tagged release.
+#
+# Before your first release, create two repos under your account so the brew and
+# scoop steps can publish to them:  homebrew-tap  and  scoop-bucket
+# (or comment out the `brews:` / `scoops:` sections below to skip them).
+# Then tag a commit and run `goreleaser release` with a GITHUB_TOKEN set.
+#
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: sift
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: sift
+    main: .
+    binary: sift
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - shell/*
+
+checksum:
+  name_template: checksums.txt
+
+# Linux system packages (.deb / .rpm / .apk) via nfpm.
+nfpms:
+  - id: sift
+    package_name: sift
+    maintainer: Anshika2203
+    description: A fast, interactive command-line fuzzy finder.
+    homepage: https://github.com/Anshika2203/sift
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+
+# Homebrew tap. Create a repo named "homebrew-tap" under your account first.
+brews:
+  - name: sift
+    repository:
+      owner: Anshika2203
+      name: homebrew-tap
+    homepage: https://github.com/Anshika2203/sift
+    description: A fast, interactive command-line fuzzy finder.
+    license: MIT
+
+# Scoop bucket for Windows. Create a repo named "scoop-bucket" first.
+scoops:
+  - repository:
+      owner: Anshika2203
+      name: scoop-bucket
+    homepage: https://github.com/Anshika2203/sift
+    description: A fast, interactive command-line fuzzy finder.
+    license: MIT
+
+release:
+  github:
+    owner: Anshika2203
+    name: sift

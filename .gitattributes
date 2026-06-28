@@ -1,0 +1,6 @@
+# Normalise line endings to LF for all text files. This keeps the embedded
+# shell scripts working when the repo is checked out on Windows.
+* text=auto eol=lf
+
+# Treat compiled binaries as binary.
+*.exe binary

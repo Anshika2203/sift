@@ -1,0 +1,15 @@
+# Build output
+/sift
+/sift.exe
+/dist/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
