@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 352" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15">
+  <!-- window -->
+  <rect x="6" y="6" width="848" height="340" rx="12" fill="#1e1e2e" stroke="#313244"/>
+  <!-- traffic lights -->
+  <circle cx="34" cy="32" r="6" fill="#f38ba8"/>
+  <circle cx="56" cy="32" r="6" fill="#f9e2af"/>
+  <circle cx="78" cy="32" r="6" fill="#a6e3a1"/>
+  <text x="430" y="37" text-anchor="middle" fill="#6c7086">sift</text>
+  <line x1="6" y1="52" x2="854" y2="52" stroke="#313244"/>
+
+  <!-- pane separator -->
+  <line x1="418" y1="64" x2="418" y2="332" stroke="#313244"/>
+
+  <!-- ===== left pane: the finder ===== -->
+  <!-- prompt + query -->
+  <text x="28" y="88"><tspan fill="#cba6f7">&#62; </tspan><tspan fill="#cdd6f4">rprt</tspan></text>
+  <rect x="68" y="76" width="9" height="17" fill="#cdd6f4" opacity="0.7"/>
+  <!-- counter -->
+  <text x="28" y="114" fill="#6c7086">&#160;&#160;3/4213</text>
+
+  <!-- selected row highlight -->
+  <rect x="18" y="124" width="384" height="26" rx="6" fill="#313244"/>
+
+  <!-- list -->
+  <text x="28" y="142"><tspan fill="#f38ba8">&#62;</tspan></text>
+  <text x="52" y="142"><tspan fill="#a6e3a1" font-weight="bold">r</tspan><tspan fill="#cdd6f4">e</tspan><tspan fill="#a6e3a1" font-weight="bold">p</tspan><tspan fill="#cdd6f4">o</tspan><tspan fill="#a6e3a1" font-weight="bold">r</tspan><tspan fill="#a6e3a1" font-weight="bold">t</tspan><tspan fill="#cdd6f4">_2024_final.txt</tspan></text>
+
+  <text x="52" y="172"><tspan fill="#a6e3a1">r</tspan><tspan fill="#7f849c">qua</tspan><tspan fill="#a6e3a1">r</tspan><tspan fill="#7f849c">terly_re</tspan><tspan fill="#a6e3a1">p</tspan><tspan fill="#7f849c">or</tspan><tspan fill="#a6e3a1">t</tspan><tspan fill="#7f849c">.txt</tspan></text>
+  <text x="52" y="202"><tspan fill="#a6e3a1">r</tspan><tspan fill="#7f849c">e</tspan><tspan fill="#a6e3a1">p</tspan><tspan fill="#7f849c">o</tspan><tspan fill="#a6e3a1">r</tspan><tspan fill="#7f849c">ts/q3-prin</tspan><tspan fill="#a6e3a1">t</tspan><tspan fill="#7f849c">able.txt</tspan></text>
+  <text x="52" y="232" fill="#7f849c">sprint-retro.md</text>
+  <text x="52" y="262" fill="#7f849c">apparent-bug.log</text>
+
+  <!-- footer hint -->
+  <text x="28" y="312" fill="#585b70" font-size="13">&#8593;/&#8595; move &#160;&#160;enter select&#160;&#160;tab multi&#160;&#160;esc cancel</text>
+
+  <!-- ===== right pane: preview of the highlighted item ===== -->
+  <text x="440" y="88" fill="#fab387">report_2024_final.txt</text>
+  <line x1="440" y1="100" x2="820" y2="100" stroke="#313244"/>
+  <text x="440" y="130" fill="#89b4fa"># Q4 2024 &#8212; Final Report</text>
+  <text x="440" y="160"><tspan fill="#cdd6f4">Revenue&#160;&#160;&#160;&#160;$1.24M&#160;&#160;</tspan><tspan fill="#a6e3a1">&#9650; 18%</tspan></text>
+  <text x="440" y="190"><tspan fill="#cdd6f4">Churn&#160;&#160;&#160;&#160;&#160;&#160;2.1%&#160;&#160;&#160;</tspan><tspan fill="#f38ba8">&#9660; 0.4%</tspan></text>
+  <text x="440" y="220" fill="#cdd6f4">NPS&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;61</text>
+  <text x="440" y="250"><tspan fill="#cdd6f4">Status&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#a6e3a1" font-weight="bold">APPROVED</tspan></text>
+</svg>

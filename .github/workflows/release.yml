@@ -1,0 +1,35 @@
+name: Release
+
+# Runs GoReleaser automatically when you push a version tag, e.g.:
+#   git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # create the GitHub release and upload assets
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser needs the full history and tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          # NOTE: the default secrets.GITHUB_TOKEN can only write to THIS repo,
+          # so it cannot publish to the homebrew-tap / scoop-bucket repos.
+          # Create a Personal Access Token with access to all three repos and
+          # add it as a repository secret named GORELEASER_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.GORELEASER_TOKEN }}

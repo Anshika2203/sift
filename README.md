@@ -8,6 +8,12 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/Anshika2203/sift.svg)](https://pkg.go.dev/github.com/Anshika2203/sift)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+<br>
+
+<img src="docs/demo.svg" alt="sift narrowing a file list with the query 'rprt' — matched characters highlighted, preview pane on the right" width="780">
+
+<sub>Static preview — run <code>vhs docs/demo.tape</code> to record an animated GIF (see <a href="docs/demo.tape">docs/demo.tape</a>).</sub>
+
 </div>
 
 `sift` takes any list of lines — files, command history, git branches, anything —
@@ -15,13 +21,6 @@ and lets you narrow it down to the one you want by typing just a few letters.
 The characters you type only have to appear *in order*, not next to each other,
 so `rprt` finds `report_2024_final.txt`. Matches are ranked so the most likely
 result floats to the top.
-
-```text
-> rprt
-  2/4213
-> report_2024_final.txt
-  quarterly_report.txt
-```
 
 Pipe a list in, type to filter, press <kbd>Enter</kbd>, and `sift` prints what
 you picked.
