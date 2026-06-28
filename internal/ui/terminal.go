@@ -14,6 +14,7 @@ import (
 
 	"github.com/Anshika2203/sift/internal/matcher"
 	"github.com/Anshika2203/sift/internal/pattern"
+	"github.com/Anshika2203/sift/internal/tokenizer"
 )
 
 // Options configures an interactive session.
@@ -27,6 +28,14 @@ type Options struct {
 	Fuzzy   bool         // default term type fuzzy (true) or exact (--exact)
 	Case    pattern.Case // case-sensitivity policy
 	Sort    bool         // rank by score (false keeps input order)
+	AlgoV2  bool         // use the optimal v2 fuzzy scorer
+
+	Tiebreak   []matcher.Tiebreak
+	Delimiter  tokenizer.Delimiter
+	Nth        []tokenizer.Range
+	WithNth    []tokenizer.Range
+	HasNth     bool
+	HasWithNth bool
 }
 
 // Result is what the user picked.
@@ -117,10 +126,17 @@ func (e *previewEvent) When() time.Time { return e.t }
 
 func (m *model) recompute() {
 	m.matches = matcher.Filter(m.items, string(m.query), matcher.Options{
-		Fuzzy:   m.opts.Fuzzy,
-		Case:    m.opts.Case,
-		Sort:    m.opts.Sort,
-		WithPos: true,
+		Fuzzy:      m.opts.Fuzzy,
+		Case:       m.opts.Case,
+		Sort:       m.opts.Sort,
+		WithPos:    true,
+		AlgoV2:     m.opts.AlgoV2,
+		Tiebreak:   m.opts.Tiebreak,
+		Delimiter:  m.opts.Delimiter,
+		Nth:        m.opts.Nth,
+		WithNth:    m.opts.WithNth,
+		HasNth:     m.opts.HasNth,
+		HasWithNth: m.opts.HasWithNth,
 	})
 	m.cursor = 0
 	m.offset = 0
@@ -172,7 +188,7 @@ func (m *model) accept() Result {
 		return Result{Selected: out, Query: q}
 	}
 	if cur, ok := m.current(); ok {
-		return Result{Selected: []string{cur.Text}, Query: q}
+		return Result{Selected: []string{cur.Output}, Query: q}
 	}
 	return Result{Aborted: true, Query: q}
 }
@@ -359,13 +375,13 @@ func (m *model) refreshPreview() {
 		m.previewLines = nil
 		return
 	}
-	if cur.Text == m.previewItem {
+	if cur.Output == m.previewItem {
 		return
 	}
-	m.previewItem = cur.Text
+	m.previewItem = cur.Output
 	m.previewGen++
 	gen := m.previewGen
-	cmdStr := strings.ReplaceAll(m.opts.Preview, "{}", shellQuote(cur.Text))
+	cmdStr := strings.ReplaceAll(m.opts.Preview, "{}", shellQuote(cur.Output))
 
 	go func() {
 		out := runShell(cmdStr)

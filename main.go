@@ -15,6 +15,7 @@ import (
 	"github.com/Anshika2203/sift/internal/matcher"
 	"github.com/Anshika2203/sift/internal/pattern"
 	"github.com/Anshika2203/sift/internal/reader"
+	"github.com/Anshika2203/sift/internal/tokenizer"
 	"github.com/Anshika2203/sift/internal/ui"
 )
 
@@ -44,6 +45,11 @@ Search:
   -i, --ignore-case      case-insensitive matching
   +i, --no-ignore-case   case-sensitive matching
       --literal          accepted for compatibility (no normalization applied)
+      --algo TYPE        fuzzy algorithm: v2 (optimal, default) or v1 (greedy)
+      --tiebreak C[,..]  tie-break order: length, begin, end, index
+  -n, --nth N[,..]       limit search to these fields
+      --with-nth N[,..]  display only these fields
+  -d, --delimiter STR    field delimiter (default: whitespace)
   +s, --no-sort          do not sort the result by score
       --tac              reverse the order of the input
 
@@ -103,6 +109,33 @@ type config struct {
 	tac         bool
 	selectOne   bool
 	exitZero    bool
+	algoV2      bool
+	tiebreak    []matcher.Tiebreak
+	delim       tokenizer.Delimiter
+	nth         []tokenizer.Range
+	withNth     []tokenizer.Range
+	hasNth      bool
+	hasWithNth  bool
+}
+
+func parseTiebreak(spec string) ([]matcher.Tiebreak, error) {
+	var out []matcher.Tiebreak
+	for _, p := range strings.Split(spec, ",") {
+		switch strings.TrimSpace(p) {
+		case "length":
+			out = append(out, matcher.TieLength)
+		case "begin":
+			out = append(out, matcher.TieBegin)
+		case "end":
+			out = append(out, matcher.TieEnd)
+		case "index":
+			out = append(out, matcher.TieIndex)
+		case "":
+		default:
+			return nil, fmt.Errorf("invalid --tiebreak criterion: %q", p)
+		}
+	}
+	return out, nil
 }
 
 // expandArgs splits "--key=value" into "--key" "value" so the parser only has
@@ -163,7 +196,7 @@ func splitArgs(s string) []string {
 }
 
 func parseArgs(args []string) (config, error) {
-	c := config{prompt: "> ", caseMode: pattern.CaseSmart}
+	c := config{prompt: "> ", caseMode: pattern.CaseSmart, algoV2: true, delim: tokenizer.NewDelimiter("")}
 	next := func(i *int, flag string) (string, error) {
 		if *i+1 >= len(args) {
 			return "", fmt.Errorf("missing value for %s", flag)
@@ -203,6 +236,43 @@ func parseArgs(args []string) (config, error) {
 			c.caseMode = pattern.CaseRespect
 		case "--literal":
 			c.literal = true
+		case "--algo":
+			if v, err = next(&i, a); err == nil {
+				switch v {
+				case "v1":
+					c.algoV2 = false
+				case "v2":
+					c.algoV2 = true
+				default:
+					err = fmt.Errorf("invalid --algo: %q (use v1 or v2)", v)
+				}
+			}
+		case "--tiebreak":
+			if v, err = next(&i, a); err == nil {
+				c.tiebreak, err = parseTiebreak(v)
+			}
+		case "-n", "--nth":
+			if v, err = next(&i, a); err == nil {
+				var ok bool
+				if c.nth, ok = tokenizer.ParseRanges(v); !ok {
+					err = fmt.Errorf("invalid --nth: %q", v)
+				} else {
+					c.hasNth = true
+				}
+			}
+		case "--with-nth":
+			if v, err = next(&i, a); err == nil {
+				var ok bool
+				if c.withNth, ok = tokenizer.ParseRanges(v); !ok {
+					err = fmt.Errorf("invalid --with-nth: %q", v)
+				} else {
+					c.hasWithNth = true
+				}
+			}
+		case "-d", "--delimiter":
+			if v, err = next(&i, a); err == nil {
+				c.delim = tokenizer.NewDelimiter(v)
+			}
 		case "+s", "--no-sort":
 			c.noSort = true
 		case "--tac":
@@ -299,7 +369,18 @@ func main() {
 	if cfg.print0 {
 		sep = "\x00"
 	}
-	mopts := matcher.Options{Fuzzy: !cfg.exact, Case: cfg.caseMode, Sort: !cfg.noSort}
+	mopts := matcher.Options{
+		Fuzzy:      !cfg.exact,
+		Case:       cfg.caseMode,
+		Sort:       !cfg.noSort,
+		AlgoV2:     cfg.algoV2,
+		Tiebreak:   cfg.tiebreak,
+		Delimiter:  cfg.delim,
+		Nth:        cfg.nth,
+		WithNth:    cfg.withNth,
+		HasNth:     cfg.hasNth,
+		HasWithNth: cfg.hasWithNth,
+	}
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
@@ -312,7 +393,7 @@ func main() {
 			emit(cfg.filter)
 		}
 		for _, mt := range matches {
-			emit(mt.Text)
+			emit(mt.Output)
 		}
 		out.Flush()
 		if len(matches) == 0 {
@@ -338,21 +419,28 @@ func main() {
 			if len(cfg.expect) > 0 {
 				emit("")
 			}
-			emit(matches[0].Text)
+			emit(matches[0].Output)
 			return
 		}
 	}
 
 	res, err := ui.Run(items, ui.Options{
-		Prompt:  cfg.prompt,
-		Query:   cfg.query,
-		Multi:   cfg.multi,
-		Preview: cfg.preview,
-		Header:  header,
-		Expect:  cfg.expect,
-		Fuzzy:   !cfg.exact,
-		Case:    cfg.caseMode,
-		Sort:    !cfg.noSort,
+		Prompt:     cfg.prompt,
+		Query:      cfg.query,
+		Multi:      cfg.multi,
+		Preview:    cfg.preview,
+		Header:     header,
+		Expect:     cfg.expect,
+		Fuzzy:      !cfg.exact,
+		Case:       cfg.caseMode,
+		Sort:       !cfg.noSort,
+		AlgoV2:     cfg.algoV2,
+		Tiebreak:   cfg.tiebreak,
+		Delimiter:  cfg.delim,
+		Nth:        cfg.nth,
+		WithNth:    cfg.withNth,
+		HasNth:     cfg.hasNth,
+		HasWithNth: cfg.hasWithNth,
 	})
 	if err != nil {
 		fail(err)

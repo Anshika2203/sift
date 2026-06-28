@@ -38,8 +38,9 @@ const (
 
 // Options configures how a query string is parsed.
 type Options struct {
-	Fuzzy bool // default term type is fuzzy (true) or exact (false, i.e. --exact)
-	Case  Case
+	Fuzzy  bool // default term type is fuzzy (true) or exact (false, i.e. --exact)
+	Case   Case
+	AlgoV2 bool // use the optimal v2 scorer for fuzzy terms
 }
 
 type termType int
@@ -69,7 +70,7 @@ type Pattern struct {
 	empty    bool
 }
 
-func fnFor(t termType) matchFunc {
+func fnFor(t termType, fuzzy matchFunc) matchFunc {
 	switch t {
 	case termExact:
 		return algo.ExactMatch
@@ -82,12 +83,17 @@ func fnFor(t termType) matchFunc {
 	case termEqual:
 		return algo.EqualMatch
 	default:
-		return algo.Match
+		return fuzzy
 	}
 }
 
 // Parse builds a Pattern from a raw query string.
 func Parse(query string, opts Options) *Pattern {
+	fuzzy := matchFunc(algo.Match)
+	if opts.AlgoV2 {
+		fuzzy = algo.MatchV2
+	}
+
 	tokens := strings.Fields(query)
 	p := &Pattern{}
 
@@ -103,7 +109,7 @@ func Parse(query string, opts Options) *Pattern {
 		}
 		afterBar = false
 
-		t, ok := parseTerm(tok, opts)
+		t, ok := parseTerm(tok, opts, fuzzy)
 		if !ok {
 			continue
 		}
@@ -126,7 +132,7 @@ func Parse(query string, opts Options) *Pattern {
 	return p
 }
 
-func parseTerm(tok string, opts Options) (term, bool) {
+func parseTerm(tok string, opts Options, fuzzy matchFunc) (term, bool) {
 	typ := termFuzzy
 	if !opts.Fuzzy {
 		typ = termExact
@@ -190,7 +196,7 @@ func parseTerm(tok string, opts Options) (term, bool) {
 			runes[i] = toLower(r)
 		}
 	}
-	return term{inv: inv, caseSensitive: caseSensitive, text: runes, fn: fnFor(typ)}, true
+	return term{inv: inv, caseSensitive: caseSensitive, text: runes, fn: fnFor(typ, fuzzy)}, true
 }
 
 // IsEmpty reports whether the pattern has no terms (and so matches everything).

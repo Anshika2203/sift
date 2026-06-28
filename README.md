@@ -149,6 +149,23 @@ Matching is case-insensitive unless a term contains an uppercase letter
 (*smart case*). Override with `-i`/`+i`, or make terms exact by default with
 `-e`/`--exact`.
 
+### Fields
+
+Restrict the search (or the display) to specific columns. Fields are split on
+whitespace by default, or on `--delimiter`. Indexes are 1-based; negatives count
+from the end; `2..`, `..3`, and `2..4` are ranges.
+
+```sh
+# search only the 2nd column, but keep the whole line
+ps aux | sift --nth 2
+
+# colon-separated, search the first field
+sift -d ':' --nth 1 < /etc/passwd
+
+# show only the last field while searching it
+sift --with-nth -1
+```
+
 ### Options
 
 | Flag | Description |
@@ -161,6 +178,11 @@ Matching is case-insensitive unless a term contains an uppercase letter
 | `--header-lines N` | treat the first N input lines as a sticky header |
 | `-e`, `--exact` | exact-match by default (`'` flips a term to fuzzy) |
 | `-i` / `+i` | force case-insensitive / case-sensitive matching |
+| `--algo v1\|v2` | fuzzy algorithm: optimal `v2` (default) or greedy `v1` |
+| `--tiebreak C[,..]` | tie-break order: `length`, `begin`, `end`, `index` |
+| `-n`, `--nth N[,..]` | limit the search to certain fields |
+| `--with-nth N[,..]` | display only certain fields |
+| `-d`, `--delimiter STR` | field delimiter (default: whitespace) |
 | `+s`, `--no-sort` | keep input order instead of ranking by score |
 | `--tac` | reverse the input order |
 | `-f`, `--filter STR` | non-interactive: print matches and exit |
