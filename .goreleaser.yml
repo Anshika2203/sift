@@ -60,8 +60,8 @@ nfpms:
       - rpm
       - apk
 
-# Homebrew tap. Create a repo named "homebrew-tap" under your account first.
-brews:
+# Homebrew tap (generates a cask). Create a repo named "homebrew-tap" first.
+homebrew_casks:
   - name: sift
     repository:
       owner: Anshika2203
