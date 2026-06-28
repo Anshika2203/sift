@@ -6,12 +6,14 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/Anshika2203/sift/internal/ansi"
 	"github.com/Anshika2203/sift/internal/matcher"
 	"github.com/Anshika2203/sift/internal/pattern"
 	"github.com/Anshika2203/sift/internal/tokenizer"
@@ -22,7 +24,7 @@ type Options struct {
 	Prompt  string       // text shown before the query, e.g. "> "
 	Query   string       // initial query
 	Multi   bool         // allow selecting multiple items with Tab
-	Preview string       // command template; "{}" is replaced by the highlighted item
+	Preview string       // command template; placeholders like {}, {q}, {1} expand
 	Header  []string     // fixed header lines shown above the list
 	Expect  []string     // extra keys that accept and report which key was pressed
 	Fuzzy   bool         // default term type fuzzy (true) or exact (--exact)
@@ -36,6 +38,9 @@ type Options struct {
 	WithNth    []tokenizer.Range
 	HasNth     bool
 	HasWithNth bool
+
+	PreviewWindow string        // e.g. "right,50%", "up,40%", "hidden"
+	Colors        [][]ansi.Span // per-item ANSI styling (--ansi), indexed by item index
 }
 
 // Result is what the user picked.
@@ -67,13 +72,17 @@ func Run(items []string, opts Options) (Result, error) {
 		expect[k] = true
 	}
 
+	pv, hidden := parsePreviewWindow(opts.PreviewWindow)
+
 	m := &model{
-		screen:   screen,
-		opts:     opts,
-		items:    items,
-		selected: map[int]bool{},
-		query:    []rune(opts.Query),
-		expect:   expect,
+		screen:        screen,
+		opts:          opts,
+		items:         items,
+		selected:      map[int]bool{},
+		query:         []rune(opts.Query),
+		expect:        expect,
+		pv:            pv,
+		previewHidden: hidden,
 	}
 	m.recompute()
 	m.refreshPreview()
@@ -98,6 +107,14 @@ func Run(items []string, opts Options) (Result, error) {
 	}
 }
 
+// previewWindow describes the parsed --preview-window layout.
+type previewWindow struct {
+	pos     string // up | down | left | right
+	pct     int
+	abs     int
+	percent bool
+}
+
 // model holds all interactive state.
 type model struct {
 	screen   tcell.Screen
@@ -110,9 +127,12 @@ type model struct {
 	selected map[int]bool    // keyed by original item index
 	expect   map[string]bool // keys that accept and report themselves
 
-	previewGen   int
-	previewItem  string
-	previewLines []string
+	pv            previewWindow
+	previewHidden bool
+	previewGen    int
+	previewKey    string // last expanded preview command (cache guard)
+	previewLines  []string
+	previewOffset int
 }
 
 // previewEvent carries asynchronous preview output back to the event loop.
@@ -166,6 +186,16 @@ func (m *model) move(delta int) {
 	}
 }
 
+func (m *model) previewScroll(delta int) {
+	m.previewOffset += delta
+	if m.previewOffset > len(m.previewLines)-1 {
+		m.previewOffset = len(m.previewLines) - 1
+	}
+	if m.previewOffset < 0 {
+		m.previewOffset = 0
+	}
+}
+
 func (m *model) toggleSelect() {
 	if cur, ok := m.current(); ok {
 		if m.selected[cur.Index] {
@@ -176,8 +206,7 @@ func (m *model) toggleSelect() {
 	}
 }
 
-func (m *model) accept() Result {
-	q := string(m.query)
+func (m *model) selectedItems(cur matcher.Match) []string {
 	if m.opts.Multi && len(m.selected) > 0 {
 		var out []string
 		for i := range m.items {
@@ -185,7 +214,15 @@ func (m *model) accept() Result {
 				out = append(out, m.items[i])
 			}
 		}
-		return Result{Selected: out, Query: q}
+		return out
+	}
+	return []string{cur.Output}
+}
+
+func (m *model) accept() Result {
+	q := string(m.query)
+	if items := m.selectedItems(matcher.Match{}); m.opts.Multi && len(m.selected) > 0 {
+		return Result{Selected: items, Query: q}
 	}
 	if cur, ok := m.current(); ok {
 		return Result{Selected: []string{cur.Output}, Query: q}
@@ -200,6 +237,30 @@ func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
 			r := m.accept()
 			r.Key = name
 			return true, r
+		}
+	}
+
+	// Preview navigation.
+	if m.opts.Preview != "" {
+		if ev.Key() == tcell.KeyCtrlO {
+			m.previewHidden = !m.previewHidden
+			return false, Result{}
+		}
+		if ev.Modifiers()&(tcell.ModShift|tcell.ModAlt) != 0 {
+			switch ev.Key() {
+			case tcell.KeyUp:
+				m.previewScroll(-1)
+				return false, Result{}
+			case tcell.KeyDown:
+				m.previewScroll(1)
+				return false, Result{}
+			case tcell.KeyPgUp:
+				m.previewScroll(-10)
+				return false, Result{}
+			case tcell.KeyPgDn:
+				m.previewScroll(10)
+				return false, Result{}
+			}
 		}
 	}
 
@@ -248,14 +309,34 @@ func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
 	return false, Result{}
 }
 
-// listHeight returns the number of rows currently available for the list.
+// listHeight returns the number of list rows currently available.
 func (m *model) listHeight() int {
 	_, h := m.screen.Size()
-	top := 2 + len(m.opts.Header) // prompt + counter + header lines
-	if h-top < 1 {
+	lh := h
+	if m.opts.Preview != "" && !m.previewHidden && (m.pv.pos == "up" || m.pv.pos == "down") {
+		lh = h - m.previewSize(h) - 1
+	}
+	top := 2 + len(m.opts.Header)
+	if lh-top < 1 {
 		return 1
 	}
-	return h - top
+	return lh - top
+}
+
+func (m *model) previewSize(total int) int {
+	n := total / 2
+	if m.pv.percent {
+		n = total * m.pv.pct / 100
+	} else {
+		n = m.pv.abs
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > total-2 {
+		n = total - 2
+	}
+	return n
 }
 
 func (m *model) draw() {
@@ -263,16 +344,57 @@ func (m *model) draw() {
 	s.Clear()
 	w, h := s.Size()
 
-	listW := w
-	previewOn := m.opts.Preview != ""
-	if previewOn {
-		listW = w / 2
-		if listW < 12 { // too narrow to bother splitting
-			listW = w
-			previewOn = false
+	showPreview := m.opts.Preview != "" && !m.previewHidden
+	lx, ly, lw, lh := 0, 0, w, h
+	px, py, pw, ph := 0, 0, 0, 0
+	sepPos, sepHoriz := -1, false
+
+	if showPreview {
+		switch m.pv.pos {
+		case "left", "right":
+			pwd := m.previewSize(w)
+			pw, ph = pwd, h
+			if m.pv.pos == "right" {
+				px, lw, sepPos = w-pwd, w-pwd-1, w-pwd-1
+			} else {
+				px, lx, lw, sepPos = 0, pwd+1, w-pwd-1, pwd
+			}
+		default: // up / down
+			phd := m.previewSize(h)
+			pw, ph, sepHoriz = w, phd, true
+			if m.pv.pos == "up" {
+				py, ly, lh, sepPos = 0, phd+1, h-phd-1, phd
+			} else {
+				py, lh, sepPos = h-phd, h-phd-1, h-phd-1
+			}
+		}
+		if lw < 1 {
+			lw = 1
+		}
+		if lh < 1 {
+			lh = 1
 		}
 	}
 
+	m.renderFinder(lx, ly, lw, lh)
+	if showPreview {
+		m.renderPreview(px, py, pw, ph)
+		sepStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
+		if sepHoriz {
+			for x := 0; x < w; x++ {
+				s.SetContent(x, sepPos, '─', nil, sepStyle)
+			}
+		} else {
+			for y := 0; y < h; y++ {
+				s.SetContent(sepPos, y, '│', nil, sepStyle)
+			}
+		}
+	}
+	s.Show()
+}
+
+func (m *model) renderFinder(lx, ly, lw, lh int) {
+	s := m.screen
 	var (
 		promptStyle  = tcell.StyleDefault.Foreground(tcell.ColorAqua)
 		counterStyle = tcell.StyleDefault.Foreground(tcell.ColorGray)
@@ -280,38 +402,34 @@ func (m *model) draw() {
 		matchStyle   = tcell.StyleDefault.Foreground(tcell.ColorGreen).Bold(true)
 		selStyle     = tcell.StyleDefault.Foreground(tcell.ColorYellow).Bold(true)
 		headerStyle  = tcell.StyleDefault.Foreground(tcell.ColorPurple)
-		sepStyle     = tcell.StyleDefault.Foreground(tcell.ColorGray)
 	)
 
-	y := 0
-
-	// Prompt + query.
-	x := puts(s, 0, y, m.opts.Prompt, promptStyle)
-	x = puts(s, x, y, string(m.query), tcell.StyleDefault)
+	y := ly
+	x := puts(s, lx, y, m.opts.Prompt, promptStyle)
+	x = putsClip(s, x, y, string(m.query), tcell.StyleDefault, lx+lw)
+	if x > lx+lw-1 {
+		x = lx + lw - 1
+	}
 	s.ShowCursor(x, y)
 	y++
 
-	// Counter line.
 	counter := fmt.Sprintf("  %d/%d", len(m.matches), len(m.items))
 	if m.opts.Multi && len(m.selected) > 0 {
 		counter += fmt.Sprintf(" (%d selected)", len(m.selected))
 	}
-	puts(s, 0, y, counter, counterStyle)
+	puts(s, lx, y, truncate(counter, lw), counterStyle)
 	y++
 
-	// Optional header lines.
 	for _, hl := range m.opts.Header {
-		puts(s, 0, y, truncate(hl, listW), headerStyle)
+		puts(s, lx, y, truncate(hl, lw), headerStyle)
 		y++
 	}
 
 	listTop := y
-	listRows := h - listTop
+	listRows := ly + lh - listTop
 	if listRows < 0 {
 		listRows = 0
 	}
-
-	// Keep the cursor on screen.
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}
@@ -328,66 +446,94 @@ func (m *model) draw() {
 			break
 		}
 		mt := m.matches[idx]
-		ly := listTop + row
-
+		yy := listTop + row
 		if idx == m.cursor {
-			puts(s, 0, ly, ">", pointerStyle)
+			puts(s, lx, yy, ">", pointerStyle)
 		}
 		if m.opts.Multi && m.selected[mt.Index] {
-			puts(s, 1, ly, "+", selStyle)
+			puts(s, lx+1, yy, "+", selStyle)
 		}
-
 		base := tcell.StyleDefault
 		if idx == m.cursor {
 			base = base.Bold(true)
 		}
-		drawMatch(s, 2, ly, listW-2, mt, base, matchStyle)
-	}
-
-	// Preview pane.
-	if previewOn {
-		for yy := 0; yy < h; yy++ {
-			s.SetContent(listW, yy, '│', nil, sepStyle)
+		var spans []ansi.Span
+		if !m.opts.HasWithNth && m.opts.Colors != nil && mt.Index < len(m.opts.Colors) {
+			spans = m.opts.Colors[mt.Index]
 		}
-		px := listW + 2
-		pw := w - px
-		for i, line := range m.previewLines {
-			if i >= h {
-				break
-			}
-			puts(s, px, i, truncate(expandTabs(line), pw), tcell.StyleDefault)
-		}
+		drawMatch(s, lx+2, yy, lw-2, mt, spans, base, matchStyle)
 	}
-
-	s.Show()
 }
 
-// refreshPreview launches the preview command for the highlighted item, if the
-// item changed since last time. The command runs in a goroutine and posts its
-// output back to the event loop so a slow preview never blocks input.
+func (m *model) renderPreview(px, py, pw, ph int) {
+	if pw < 1 || ph < 1 {
+		return
+	}
+	s := m.screen
+	for row := 0; row < ph; row++ {
+		li := m.previewOffset + row
+		if li < 0 || li >= len(m.previewLines) {
+			continue
+		}
+		puts(s, px, py+row, truncate(expandTabs(m.previewLines[li]), pw), tcell.StyleDefault)
+	}
+}
+
+// refreshPreview launches the preview command for the current selection if the
+// expanded command changed. It runs in a goroutine and posts results back so a
+// slow preview never blocks input.
 func (m *model) refreshPreview() {
 	if m.opts.Preview == "" {
 		return
 	}
 	cur, ok := m.current()
 	if !ok {
-		m.previewItem = ""
-		m.previewLines = nil
+		m.previewKey, m.previewLines, m.previewOffset = "", nil, 0
 		return
 	}
-	if cur.Output == m.previewItem {
+	cmdStr := m.expandPreview(cur)
+	if cmdStr == m.previewKey {
 		return
 	}
-	m.previewItem = cur.Output
+	m.previewKey = cmdStr
+	m.previewOffset = 0
 	m.previewGen++
 	gen := m.previewGen
-	cmdStr := strings.ReplaceAll(m.opts.Preview, "{}", shellQuote(cur.Output))
-
 	go func() {
 		out := runShell(cmdStr)
 		lines := strings.Split(strings.ReplaceAll(stripANSI(out), "\r\n", "\n"), "\n")
 		m.screen.PostEvent(&previewEvent{t: time.Now(), gen: gen, lines: lines})
 	}()
+}
+
+var placeholderRe = regexp.MustCompile(`\{[^{}]*\}`)
+
+// expandPreview substitutes preview placeholders: {} (current item), {q}
+// (query), {n} (index), {+} (selected items), and {N}/{-N}/{N..M} (fields).
+func (m *model) expandPreview(cur matcher.Match) string {
+	query := string(m.query)
+	selected := m.selectedItems(cur)
+	return placeholderRe.ReplaceAllStringFunc(m.opts.Preview, func(tok string) string {
+		switch inner := tok[1 : len(tok)-1]; inner {
+		case "":
+			return shellQuote(cur.Output)
+		case "q":
+			return shellQuote(query)
+		case "n":
+			return strconv.Itoa(cur.Index)
+		case "+":
+			parts := make([]string, len(selected))
+			for i, s := range selected {
+				parts[i] = shellQuote(s)
+			}
+			return strings.Join(parts, " ")
+		default:
+			if ranges, ok := tokenizer.ParseRanges(inner); ok {
+				return shellQuote(tokenizer.Join(cur.Output, m.opts.Delimiter, ranges))
+			}
+			return tok
+		}
+	})
 }
 
 // --- small helpers ---
@@ -422,7 +568,18 @@ func puts(s tcell.Screen, x, y int, str string, style tcell.Style) int {
 	return x
 }
 
-func drawMatch(s tcell.Screen, x, y, maxw int, mt matcher.Match, base, high tcell.Style) {
+func putsClip(s tcell.Screen, x, y int, str string, style tcell.Style, maxX int) int {
+	for _, r := range str {
+		if x >= maxX {
+			break
+		}
+		s.SetContent(x, y, r, nil, style)
+		x++
+	}
+	return x
+}
+
+func drawMatch(s tcell.Screen, x, y, maxw int, mt matcher.Match, spans []ansi.Span, base, high tcell.Style) {
 	if maxw <= 0 {
 		return
 	}
@@ -436,6 +593,12 @@ func drawMatch(s tcell.Screen, x, y, maxw int, mt matcher.Match, base, high tcel
 			break
 		}
 		st := base
+		for _, sp := range spans {
+			if i >= sp.Start && i < sp.End {
+				st = sp.Style
+				break
+			}
+		}
 		if posSet[i] {
 			st = high
 		}
@@ -459,6 +622,17 @@ func truncate(s string, w int) string {
 
 func expandTabs(s string) string {
 	return strings.ReplaceAll(s, "\t", "    ")
+}
+
+func deleteWord(q []rune) []rune {
+	i := len(q)
+	for i > 0 && q[i-1] == ' ' {
+		i--
+	}
+	for i > 0 && q[i-1] != ' ' {
+		i--
+	}
+	return q[:i]
 }
 
 // keyName returns a canonical name for a key event (e.g. "ctrl-y", "alt-x",
@@ -488,13 +662,46 @@ func keyName(ev *tcell.EventKey) string {
 	return ""
 }
 
-func deleteWord(q []rune) []rune {
-	i := len(q)
-	for i > 0 && q[i-1] == ' ' {
-		i--
+func atoiPos(s string) (int, bool) {
+	n := 0
+	if s == "" {
+		return 0, false
 	}
-	for i > 0 && q[i-1] != ' ' {
-		i--
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
 	}
-	return q[:i]
+	return n, true
+}
+
+func parsePreviewWindow(spec string) (previewWindow, bool) {
+	pv := previewWindow{pos: "right", pct: 50, percent: true}
+	hidden := false
+	for _, part := range strings.Split(spec, ",") {
+		switch part = strings.ToLower(strings.TrimSpace(part)); part {
+		case "":
+		case "up", "top":
+			pv.pos = "up"
+		case "down", "bottom":
+			pv.pos = "down"
+		case "left":
+			pv.pos = "left"
+		case "right":
+			pv.pos = "right"
+		case "hidden":
+			hidden = true
+		default:
+			if strings.HasSuffix(part, "%") {
+				if n, ok := atoiPos(strings.TrimSuffix(part, "%")); ok {
+					pv.pct, pv.percent = n, true
+				}
+			} else if n, ok := atoiPos(part); ok {
+				pv.abs, pv.percent = n, false
+			}
+			// any other token (border styles, wrap, etc.) is accepted and ignored
+		}
+	}
+	return pv, hidden
 }

@@ -108,6 +108,9 @@ git branch | sed 's/^[* ] //' | sift | xargs git checkout
 # Preview file contents while you browse
 find . -type f | sift --preview 'cat {}'
 
+# Preview on the bottom, 40% tall
+find . -type f | sift --preview 'cat {}' --preview-window 'down,40%'
+
 # Multi-select with Tab
 ls | sift --multi
 ```
@@ -166,6 +169,28 @@ sift -d ':' --nth 1 < /etc/passwd
 sift --with-nth -1
 ```
 
+### Preview
+
+`--preview CMD` runs a command for the highlighted item and shows its output in
+a side pane. These placeholders are expanded (and shell-quoted) in `CMD`:
+
+| Placeholder | Expands to |
+| --- | --- |
+| `{}` | the current item |
+| `{q}` | the current query |
+| `{n}` | the current item's index |
+| `{+}` | all selected items (or the current one) |
+| `{1}`, `{-1}`, `{2..3}` | field(s) of the current item |
+
+```sh
+# git branch picker with a diff preview
+git branch | sed 's/^[* ] //' | sift --preview 'git log --oneline {1}'
+```
+
+Position and size it with `--preview-window` (e.g. `up,40%`, `left,60%`,
+`hidden`). In the finder, <kbd>Ctrl-O</kbd> toggles the preview and
+<kbd>Shift</kbd>/<kbd>Alt</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> scroll it.
+
 ### Options
 
 | Flag | Description |
@@ -173,7 +198,9 @@ sift --with-nth -1
 | `-q`, `--query STR` | start with an initial query |
 | `-p`, `--prompt STR` | set the prompt (default `> `) |
 | `-m`, `--multi` | enable multi-select |
-| `--preview CMD` | run `CMD` for the highlighted item; `{}` is the item |
+| `--preview CMD` | run `CMD` for the highlighted item (see placeholders below) |
+| `--preview-window S` | `[up\|down\|left\|right][,SIZE[%]][,hidden]` (default `right,50%`) |
+| `--ansi` | parse ANSI color codes in the input |
 | `--header STR` | show fixed header line(s) above the list |
 | `--header-lines N` | treat the first N input lines as a sticky header |
 | `-e`, `--exact` | exact-match by default (`'` flips a term to fuzzy) |
@@ -215,6 +242,8 @@ sift --with-nth -1
 | <kbd>Ctrl-U</kbd> | clear query |
 | <kbd>Ctrl-W</kbd> | delete word |
 | <kbd>Backspace</kbd> | delete character |
+| <kbd>Ctrl-O</kbd> | toggle the preview window |
+| <kbd>Shift</kbd>/<kbd>Alt</kbd> + <kbd>↑</kbd>/<kbd>↓</kbd> | scroll the preview |
 
 ## Shell integration
 

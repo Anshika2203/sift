@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Anshika2203/sift/internal/ansi"
 	"github.com/Anshika2203/sift/internal/matcher"
 	"github.com/Anshika2203/sift/internal/pattern"
 	"github.com/Anshika2203/sift/internal/reader"
@@ -57,7 +58,9 @@ Interface:
   -q, --query STR        start with the given query
   -p, --prompt STR       set the input prompt (default "> ")
   -m, --multi            enable multi-select (Tab to mark, Enter to accept)
-      --preview CMD      run CMD for the highlighted item; {} is the item
+      --preview CMD      run CMD for the highlighted item; {} {q} {n} {1} {+}
+      --preview-window S layout: [up|down|left|right][,SIZE[%]][,hidden]
+      --ansi             parse ANSI color codes in the input
       --header STR       fixed header line(s) shown above the list
       --header-lines N   treat the first N input lines as a sticky header
 
@@ -116,6 +119,8 @@ type config struct {
 	withNth     []tokenizer.Range
 	hasNth      bool
 	hasWithNth  bool
+	ansi        bool
+	previewWin  string
 }
 
 func parseTiebreak(spec string) ([]matcher.Tiebreak, error) {
@@ -217,6 +222,10 @@ func parseArgs(args []string) (config, error) {
 			c.multi = true
 		case "--preview":
 			c.preview, err = next(&i, a)
+		case "--preview-window":
+			c.previewWin, err = next(&i, a)
+		case "--ansi":
+			c.ansi = true
 		case "--header":
 			c.header, err = next(&i, a)
 		case "--header-lines":
@@ -347,6 +356,17 @@ func main() {
 		fail(err)
 	}
 
+	// With --ansi, strip color codes from each item for matching/output and keep
+	// the styling (indexed alongside items) for display.
+	var colors [][]ansi.Span
+	if cfg.ansi {
+		colors = make([][]ansi.Span, len(items))
+		for i, line := range items {
+			plain, spans := ansi.Parse(line)
+			items[i], colors[i] = plain, spans
+		}
+	}
+
 	// Peel off sticky header lines from the top of the input.
 	var header []string
 	if cfg.header != "" {
@@ -359,10 +379,18 @@ func main() {
 		}
 		header = append(header, items[:n]...)
 		items = items[n:]
+		if colors != nil {
+			colors = colors[n:]
+		}
 	}
 
 	if cfg.tac {
 		reverse(items)
+		if colors != nil {
+			for i, j := 0, len(colors)-1; i < j; i, j = i+1, j-1 {
+				colors[i], colors[j] = colors[j], colors[i]
+			}
+		}
 	}
 
 	sep := "\n"
@@ -425,22 +453,24 @@ func main() {
 	}
 
 	res, err := ui.Run(items, ui.Options{
-		Prompt:     cfg.prompt,
-		Query:      cfg.query,
-		Multi:      cfg.multi,
-		Preview:    cfg.preview,
-		Header:     header,
-		Expect:     cfg.expect,
-		Fuzzy:      !cfg.exact,
-		Case:       cfg.caseMode,
-		Sort:       !cfg.noSort,
-		AlgoV2:     cfg.algoV2,
-		Tiebreak:   cfg.tiebreak,
-		Delimiter:  cfg.delim,
-		Nth:        cfg.nth,
-		WithNth:    cfg.withNth,
-		HasNth:     cfg.hasNth,
-		HasWithNth: cfg.hasWithNth,
+		Prompt:        cfg.prompt,
+		Query:         cfg.query,
+		Multi:         cfg.multi,
+		Preview:       cfg.preview,
+		Header:        header,
+		Expect:        cfg.expect,
+		Fuzzy:         !cfg.exact,
+		Case:          cfg.caseMode,
+		Sort:          !cfg.noSort,
+		AlgoV2:        cfg.algoV2,
+		Tiebreak:      cfg.tiebreak,
+		Delimiter:     cfg.delim,
+		Nth:           cfg.nth,
+		WithNth:       cfg.withNth,
+		HasNth:        cfg.hasNth,
+		HasWithNth:    cfg.hasWithNth,
+		PreviewWindow: cfg.previewWin,
+		Colors:        colors,
 	})
 	if err != nil {
 		fail(err)
