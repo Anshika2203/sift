@@ -98,7 +98,7 @@ sudo apk add --allow-untrusted sift_*_linux_amd64.apk  # Alpine
 
 ## Usage
 
-> 📖 See **[EXAMPLES.md](EXAMPLES.md)** for a full cross-platform cookbook —
+> 📖 See **[COOKBOOK.md](COOKBOOK.md)** for a full cross-platform cookbook —
 > every feature with PowerShell (Windows), Bash/Zsh (macOS/Linux), and Fish
 > examples.
 

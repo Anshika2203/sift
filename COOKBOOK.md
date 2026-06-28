@@ -1,4 +1,4 @@
-# sift — Examples Cookbook
+# sift — Cookbook
 
 Every feature of `sift`, with copy-paste examples for **Windows (PowerShell)**,
 **macOS / Linux (Bash · Zsh)**, and **Fish**. Pick the column for your shell.
@@ -468,6 +468,36 @@ export SIFT_COMPLETION_COMMAND='fd --type f'        # candidates for completion
 ---
 
 ## 15. Real-world recipes
+
+### Browse files *and* folders with a smart preview
+
+By default `Get-ChildItem -File` / `find -type f` hide folders. Drop the file
+filter to include folders, and use a preview that shows a folder's contents or a
+file's text depending on what's highlighted.
+
+```powershell
+# PowerShell — current folder (files + folders)
+Get-ChildItem -Name | sift --preview "if exist {}\* (dir {}) else (type {})"
+
+# PowerShell — recursive: jump to anything, including nested paths
+Get-ChildItem -Recurse -Name | sift --preview "if exist {}\* (dir {}) else (type {})"
+
+# tree view for folders
+Get-ChildItem -Recurse -Name | sift --preview "if exist {}\* (tree /f {}) else (type {})"
+```
+
+```bash
+# Bash / Zsh / Fish — folder listing or file text
+find . | sift --preview '[ -d {} ] && ls -la {} || cat {}'
+
+# nicer, if bat is installed: bat for files, ls for folders
+find . | sift --preview '[ -d {} ] && ls -la --color=always {} || bat --color=always {}'
+```
+
+A fuzzy finder doesn't *open* a folder on Enter — list **recursively** and
+fuzzy-jump to any nested path instead (type part of `dist\CHANGELOG.md` to land
+on it), and highlight a folder to peek inside via the preview. Press-to-descend
+navigation will arrive with the `--bind reload` action in a later release.
 
 ### Files → editor
 
