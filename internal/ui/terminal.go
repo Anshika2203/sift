@@ -54,6 +54,7 @@ type Options struct {
 	Bind       []string // --bind specs (key/event -> actions)
 	JumpLabels string   // characters used to label rows in jump mode
 	Footer     []string // sticky footer lines shown at the very bottom
+	Listen     string   // [addr:]port for the HTTP control server (empty = off)
 }
 
 // Result is what the user picked.
@@ -101,6 +102,13 @@ func Run(items []string, opts Options) (Result, error) {
 
 	if opts.Mouse {
 		screen.EnableMouse()
+	}
+
+	if opts.Listen != "" {
+		if lerr := startListener(opts.Listen, screen); lerr != nil {
+			screen.Fini()
+			return Result{}, lerr
+		}
 	}
 
 	m := &model{
@@ -155,6 +163,12 @@ func Run(items []string, opts Options) (Result, error) {
 				m.previewLines = ev.lines
 				m.draw()
 			}
+		case *remoteEvent:
+			if done, res := m.runActions(ev.acts); done {
+				m.saveHistory(res.Query)
+				return res, nil
+			}
+			m.draw()
 		case *tcell.EventMouse:
 			if m.handleMouse(ev) {
 				m.draw()

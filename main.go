@@ -20,7 +20,7 @@ import (
 	"github.com/Anshika2203/sift/internal/ui"
 )
 
-const version = "0.3.2"
+const version = "0.4.0"
 
 //go:embed shell/key-bindings.bash
 var bashBindings string
@@ -84,6 +84,7 @@ Interface:
                          execute-silent(..) become(..)
                          events: start, change, focus
       --jump-labels STR characters used to label rows for the jump action
+      --listen [A:]PORT  HTTP server to drive a running sift (local only)
       --header STR       fixed header line(s) shown above the list
       --header-lines N   treat the first N input lines as a sticky header
       --footer STR       sticky footer line(s) at the very bottom
@@ -158,6 +159,7 @@ type config struct {
 	jumpLabels  string
 	footer      string
 	style       string
+	listen      string
 }
 
 func parseTiebreak(spec string) ([]matcher.Tiebreak, error) {
@@ -305,6 +307,8 @@ func parseArgs(args []string) (config, error) {
 			c.jumpLabels, err = next(&i, a)
 		case "--footer":
 			c.footer, err = next(&i, a)
+		case "--listen":
+			c.listen, err = next(&i, a)
 		case "--style":
 			if v, err = next(&i, a); err == nil {
 				switch v {
@@ -585,6 +589,7 @@ func main() {
 		Bind:          cfg.bind,
 		JumpLabels:    cfg.jumpLabels,
 		Footer:        splitLinesOrNil(cfg.footer),
+		Listen:        cfg.listen,
 	})
 	if err != nil {
 		fail(err)

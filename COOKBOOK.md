@@ -602,6 +602,44 @@ find . -type f | sift \
 
 ---
 
+### Custom key bindings (`--bind`)
+
+`--bind 'KEY:ACTION[+ACTION...]'` (repeatable) maps keys/events to actions like
+`accept` `abort` `toggle` `select-all` `jump` `backward` `reload(..)`
+`execute(..)` `become(..)`, plus events `start` `change` `focus`. Placeholders
+`{} {q} {n} {+} {1}` expand in command actions.
+
+> On Windows the action commands run in **cmd**; on macOS/Linux in **sh**.
+
+```powershell
+# PowerShell — open the highlighted file (become), or peek with execute
+Get-ChildItem -Recurse -File -Name | sift --bind "enter:become(notepad {})"
+Get-ChildItem -File -Name | sift --bind "ctrl-e:execute(more {})" --preview "type {}"
+
+# jump mode: press ctrl-j then a label key
+Get-ChildItem -Name | sift --bind "ctrl-j:jump"
+
+# folder navigation with go-back (preview stays working via absolute paths)
+Get-ChildItem -Recurse | ForEach-Object FullName | sift `
+  --preview "if exist {}\* (dir {}) else (type {})" `
+  --bind "right:reload(dir /b /s {})" --bind "left:backward"
+```
+
+```bash
+# Bash / Zsh — editor, live grep, folder navigation
+find . -type f | sift --bind 'enter:become(${EDITOR:-vim} {})'
+sift --bind 'change:reload(rg --line-number {q} || true)'
+find . | sift --preview '[ -d {} ] && ls {} || cat {}' \
+  --bind 'right:reload(find {} -maxdepth 1)' --bind 'left:backward'
+```
+
+Drive a running sift from another program with `--listen`:
+```bash
+sift --listen 6266 &        # then, from elsewhere:
+curl -XPOST localhost:6266 -d 'reload(ls)'
+curl -XPOST localhost:6266 -d 'change-query(foo)'
+```
+
 ## 16. Keys reference
 
 | Key | Action |

@@ -110,21 +110,30 @@ func parseBindings(specs []string) (map[string][]action, error) {
 				return nil, fmt.Errorf("invalid --bind %q (expected KEY:ACTION)", pair)
 			}
 			key := normalizeKey(strings.TrimSpace(pair[:ci]))
-			var acts []action
-			for _, tok := range splitTop(pair[ci+1:], '+') {
-				if strings.TrimSpace(tok) == "" {
-					continue
-				}
-				a, err := parseAction(tok)
-				if err != nil {
-					return nil, err
-				}
-				acts = append(acts, a)
+			acts, err := parseActionList(pair[ci+1:])
+			if err != nil {
+				return nil, err
 			}
 			out[key] = acts
 		}
 	}
 	return out, nil
+}
+
+// parseActionList parses "action1+action2+..." into a slice of actions.
+func parseActionList(s string) ([]action, error) {
+	var acts []action
+	for _, tok := range splitTop(s, '+') {
+		if strings.TrimSpace(tok) == "" {
+			continue
+		}
+		a, err := parseAction(tok)
+		if err != nil {
+			return nil, err
+		}
+		acts = append(acts, a)
+	}
+	return acts, nil
 }
 
 func parseAction(tok string) (action, error) {

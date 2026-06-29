@@ -213,7 +213,12 @@ Position and size it with `--preview-window` (e.g. `up,40%`, `left,60%`,
 | `--history FILE` | load/save query history (<kbd>Ctrl-P</kbd>/<kbd>Ctrl-N</kbd>) |
 | `--border[=STYLE]` | draw a border (`rounded`, `sharp`, …) |
 | `--margin TRBL` / `--padding TRBL` | space outside / inside the border |
+| `--style PRESET` | `default`, `minimal`, or `full` |
 | `--header STR` | show fixed header line(s) above the list |
+| `--footer STR` | sticky footer line(s) at the very bottom |
+| `--bind K:ACT[,..]` | bind keys/events to actions (repeatable) — see below |
+| `--jump-labels STR` | label characters for the `jump` action |
+| `--listen [A:]PORT` | HTTP control server (local only) |
 | `--header-lines N` | treat the first N input lines as a sticky header |
 | `-e`, `--exact` | exact-match by default (`'` flips a term to fuzzy) |
 | `-i` / `+i` | force case-insensitive / case-sensitive matching |
@@ -277,6 +282,39 @@ The bash and zsh scripts also enable **fuzzy completion**: type the trigger
 `**` and press <kbd>Tab</kbd> to complete paths, e.g. `vim **<Tab>` or
 `cd **<Tab>`. Customise with `SIFT_COMPLETION_TRIGGER` and
 `SIFT_COMPLETION_COMMAND`.
+
+## Custom key bindings (`--bind`)
+
+Map keys (or events) to actions: `--bind 'KEY:ACTION[+ACTION...]'`, repeatable.
+
+**Actions:** `up` `down` `page-up` `page-down` `first` `last` · `accept`
+`abort` `toggle` `toggle-all` `select-all` `deselect-all` · `clear-query`
+`backward-delete-char` `change-query(..)` `put(..)` `change-prompt(..)` ·
+`toggle-preview` `preview-up` `preview-down` · `jump` `jump-accept` ·
+`backward` · `reload(..)` `execute(..)` `execute-silent(..)` `become(..)`
+
+**Events:** `start`, `change`, `focus`
+
+**Placeholders** in command actions: `{}` `{q}` `{n}` `{+}` `{1}`/`{-1}`/`{2..3}`.
+
+```sh
+# open the highlighted file in your editor, replacing sift
+find . -type f | sift --bind 'enter:become(${EDITOR:-vim} {})'
+
+# live grep: re-run ripgrep on every keystroke
+sift --bind 'change:reload(rg --line-number {q} || true)'
+
+# jump mode: press ctrl-j, then a label key to leap to a row
+sift --bind 'ctrl-j:jump'
+
+# folder navigation: → descends, ← goes back up (preview intact)
+find . | sift --preview '[ -d {} ] && ls {} || cat {}' \
+  --bind 'right:reload(find {} -maxdepth 1)' --bind 'left:backward'
+```
+
+`backward` undoes the last `reload`, which is what makes ← "go up a level".
+`--listen [addr:]port` starts a local HTTP server so another program can POST an
+action string (e.g. `reload(ls)`) to a running sift.
 
 ## How it works
 
