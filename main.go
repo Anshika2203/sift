@@ -76,6 +76,12 @@ Interface:
       --border[=STYLE]   draw a border (rounded, sharp, ...)
       --margin TRBL      empty space outside the finder
       --padding TRBL     empty space inside the border
+      --bind K:ACT[,..]  bind keys/events to actions (repeatable); actions:
+                         up down accept abort toggle select-all deselect-all
+                         clear-query toggle-preview preview-up preview-down
+                         change-query(..) change-prompt(..) put(..)
+                         execute(..) execute-silent(..) become(..) reload(..)
+                         events: start, change, focus
       --header STR       fixed header line(s) shown above the list
       --header-lines N   treat the first N input lines as a sticky header
 
@@ -144,6 +150,7 @@ type config struct {
 	margin      string
 	padding     string
 	border      string
+	bind        []string
 }
 
 func parseTiebreak(spec string) ([]matcher.Tiebreak, error) {
@@ -282,6 +289,10 @@ func parseArgs(args []string) (config, error) {
 				c.border, err = next(&i, a)
 			} else {
 				c.border = "rounded"
+			}
+		case "--bind":
+			if v, err = next(&i, a); err == nil {
+				c.bind = append(c.bind, v)
 			}
 		case "--header":
 			c.header, err = next(&i, a)
@@ -540,9 +551,15 @@ func main() {
 		Margin:        cfg.margin,
 		Padding:       cfg.padding,
 		Border:        cfg.border,
+		Bind:          cfg.bind,
 	})
 	if err != nil {
 		fail(err)
+	}
+
+	// A `become` action replaces sift with another command.
+	if res.Become != "" {
+		os.Exit(ui.RunCommand(res.Become))
 	}
 
 	if res.Aborted {

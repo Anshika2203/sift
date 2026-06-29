@@ -50,6 +50,8 @@ type Options struct {
 	Margin  string // empty space outside the finder: "T,R,B,L" forms
 	Padding string // empty space inside the border
 	Border  string // border style: "", "none", "rounded", "sharp", ...
+
+	Bind []string // --bind specs (key/event -> actions)
 }
 
 // Result is what the user picked.
@@ -58,7 +60,13 @@ type Result struct {
 	Aborted  bool     // true if the user pressed Esc / Ctrl-C
 	Query    string   // the final query string
 	Key      string   // the expect key that was pressed (empty for plain Enter)
+	Become   string   // if non-empty, the caller should exec this command
 }
+
+// RunCommand runs a command interactively (attached to the terminal) and
+// returns its exit code. The caller uses it to honour a `become` action after
+// Run has returned and the screen has been finalized.
+func RunCommand(command string) int { return runInteractive(command) }
 
 // Run shows the finder over items and blocks until the user accepts or aborts.
 func Run(items []string, opts Options) (Result, error) {
@@ -83,6 +91,12 @@ func Run(items []string, opts Options) (Result, error) {
 
 	pv, hidden := parsePreviewWindow(opts.PreviewWindow)
 
+	bindings, err := parseBindings(opts.Bind)
+	if err != nil {
+		screen.Fini()
+		return Result{}, err
+	}
+
 	if opts.Mouse {
 		screen.EnableMouse()
 	}
@@ -101,6 +115,7 @@ func Run(items []string, opts Options) (Result, error) {
 		histFile:      opts.History,
 		margin:        parseInsets(opts.Margin),
 		padding:       parseInsets(opts.Padding),
+		bindings:      bindings,
 	}
 	switch strings.ToLower(opts.Border) {
 	case "", "none":
@@ -112,6 +127,13 @@ func Run(items []string, opts Options) (Result, error) {
 	}
 	m.loadHistory()
 	m.recompute()
+	if b, ok := m.bindings["start"]; ok {
+		m.inEvent = true
+		if done, res := m.runActions(b); done {
+			return res, nil
+		}
+		m.inEvent = false
+	}
 	m.refreshPreview()
 	m.draw()
 
@@ -181,6 +203,9 @@ type model struct {
 	padding     [4]int
 	border      bool
 	borderRound bool
+
+	bindings map[string][]action
+	inEvent  bool // guards against event bindings re-firing events
 }
 
 // theme holds the foreground colors for UI elements (overridable via --color).
@@ -253,7 +278,147 @@ func (m *model) move(delta int) {
 	}
 	if m.cursor != old {
 		m.refreshPreview()
+		m.fireEvent("focus")
 	}
+}
+
+// editQuery recomputes after a query edit and fires the change event.
+func (m *model) editQuery() {
+	m.recompute()
+	m.refreshPreview()
+	m.fireEvent("change")
+}
+
+// fireEvent runs the actions bound to an event name (start/change/focus). The
+// inEvent guard stops an event's actions from recursively re-firing events.
+func (m *model) fireEvent(name string) {
+	if m.inEvent {
+		return
+	}
+	if acts, ok := m.bindings[name]; ok {
+		m.inEvent = true
+		m.runActions(acts)
+		m.inEvent = false
+	}
+}
+
+// runActions executes a sequence of bound actions. It returns done=true (with a
+// Result) if an action ends the session (accept / abort / become).
+func (m *model) runActions(acts []action) (bool, Result) {
+	for _, a := range acts {
+		switch a.typ {
+		case actUp:
+			m.move(-1)
+		case actDown:
+			m.move(1)
+		case actPageUp:
+			m.move(-m.listHeight())
+		case actPageDown:
+			m.move(m.listHeight())
+		case actHalfPageUp:
+			m.move(-m.listHeight() / 2)
+		case actHalfPageDown:
+			m.move(m.listHeight() / 2)
+		case actFirst:
+			m.move(-len(m.matches))
+		case actLast:
+			m.move(len(m.matches))
+		case actAccept:
+			return true, m.accept()
+		case actAbort:
+			return true, Result{Aborted: true, Query: string(m.query)}
+		case actToggle:
+			m.toggleSelect()
+		case actToggleAll:
+			m.toggleAll()
+		case actSelectAll:
+			m.selectAll(true)
+		case actDeselectAll:
+			m.selectAll(false)
+		case actClearQuery:
+			m.query = nil
+			m.editQuery()
+		case actClearSelection:
+			m.selected = map[int]bool{}
+		case actBackwardDeleteChar:
+			if len(m.query) > 0 {
+				m.query = m.query[:len(m.query)-1]
+				m.editQuery()
+			}
+		case actTogglePreview:
+			m.previewHidden = !m.previewHidden
+		case actPreviewUp:
+			m.previewScroll(-1)
+		case actPreviewDown:
+			m.previewScroll(1)
+		case actPreviewPageUp:
+			m.previewScroll(-10)
+		case actPreviewPageDown:
+			m.previewScroll(10)
+		case actChangeQuery:
+			m.query = []rune(a.arg)
+			m.editQuery()
+		case actChangePrompt:
+			m.opts.Prompt = a.arg
+		case actPut:
+			m.query = append(m.query, []rune(a.arg)...)
+			m.editQuery()
+		case actExecuteSilent:
+			runShell(m.expandFor(a.arg))
+		case actExecute:
+			m.execute(m.expandFor(a.arg))
+		case actBecome:
+			return true, Result{Become: m.expandFor(a.arg), Query: string(m.query)}
+		case actReload:
+			m.reload(m.expandFor(a.arg))
+		case actIgnore:
+		}
+	}
+	return false, Result{}
+}
+
+func (m *model) toggleAll() {
+	for _, mt := range m.matches {
+		if m.selected[mt.Index] {
+			delete(m.selected, mt.Index)
+		} else {
+			m.selected[mt.Index] = true
+		}
+	}
+}
+
+func (m *model) selectAll(sel bool) {
+	if !sel {
+		m.selected = map[int]bool{}
+		return
+	}
+	for _, mt := range m.matches {
+		m.selected[mt.Index] = true
+	}
+}
+
+// reload replaces the candidate list with the output of command.
+func (m *model) reload(command string) {
+	out := strings.ReplaceAll(runShell(command), "\r\n", "\n")
+	var items []string
+	for _, line := range strings.Split(out, "\n") {
+		if line != "" {
+			items = append(items, line)
+		}
+	}
+	m.items = items
+	m.opts.Colors = nil
+	m.selected = map[int]bool{}
+	m.recompute()
+	m.refreshPreview()
+}
+
+// execute suspends the screen, runs an interactive command attached to the
+// terminal, then restores the screen.
+func (m *model) execute(command string) {
+	m.screen.Suspend()
+	runInteractive(command)
+	m.screen.Resume()
 }
 
 func (m *model) previewScroll(delta int) {
@@ -310,6 +475,13 @@ func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
 		}
 	}
 
+	// User-defined --bind key bindings take precedence over the built-in keys.
+	if len(m.bindings) > 0 {
+		if acts, ok := m.bindings[keyName(ev)]; ok {
+			return m.runActions(acts)
+		}
+	}
+
 	// Preview navigation.
 	if m.opts.Preview != "" {
 		if ev.Key() == tcell.KeyCtrlO {
@@ -354,17 +526,14 @@ func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
 		return true, m.accept()
 	case tcell.KeyCtrlU:
 		m.query = nil
-		m.recompute()
-		m.refreshPreview()
+		m.editQuery()
 	case tcell.KeyCtrlW:
 		m.query = deleteWord(m.query)
-		m.recompute()
-		m.refreshPreview()
+		m.editQuery()
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if len(m.query) > 0 {
 			m.query = m.query[:len(m.query)-1]
-			m.recompute()
-			m.refreshPreview()
+			m.editQuery()
 		}
 	case tcell.KeyDown, tcell.KeyCtrlN:
 		m.move(1)
@@ -386,8 +555,7 @@ func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
 		}
 	case tcell.KeyRune:
 		m.query = append(m.query, ev.Rune())
-		m.recompute()
-		m.refreshPreview()
+		m.editQuery()
 	}
 	return false, Result{}
 }
@@ -677,12 +845,24 @@ func (m *model) refreshPreview() {
 
 var placeholderRe = regexp.MustCompile(`\{[^{}]*\}`)
 
-// expandPreview substitutes preview placeholders: {} (current item), {q}
-// (query), {n} (index), {+} (selected items), and {N}/{-N}/{N..M} (fields).
+// expandPreview substitutes placeholders in the preview command.
 func (m *model) expandPreview(cur matcher.Match) string {
+	return m.expandTemplate(m.opts.Preview, cur)
+}
+
+// expandFor expands placeholders in tmpl against the current selection, used by
+// execute/become/reload actions.
+func (m *model) expandFor(tmpl string) string {
+	cur, _ := m.current()
+	return m.expandTemplate(tmpl, cur)
+}
+
+// expandTemplate substitutes placeholders: {} (current item), {q} (query),
+// {n} (index), {+} (selected items), and {N}/{-N}/{N..M} (fields).
+func (m *model) expandTemplate(tmpl string, cur matcher.Match) string {
 	query := string(m.query)
 	selected := m.selectedItems(cur)
-	return placeholderRe.ReplaceAllStringFunc(m.opts.Preview, func(tok string) string {
+	return placeholderRe.ReplaceAllStringFunc(tmpl, func(tok string) string {
 		switch inner := tok[1 : len(tok)-1]; inner {
 		case "":
 			return shellQuote(cur.Output)
@@ -952,6 +1132,26 @@ func keyName(ev *tcell.EventKey) string {
 		return "tab"
 	case tcell.KeyEsc:
 		return "esc"
+	case tcell.KeyUp:
+		return "up"
+	case tcell.KeyDown:
+		return "down"
+	case tcell.KeyLeft:
+		return "left"
+	case tcell.KeyRight:
+		return "right"
+	case tcell.KeyPgUp:
+		return "pgup"
+	case tcell.KeyPgDn:
+		return "pgdn"
+	case tcell.KeyHome:
+		return "home"
+	case tcell.KeyEnd:
+		return "end"
+	case tcell.KeyDelete:
+		return "del"
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		return "bspace"
 	}
 	if k >= tcell.KeyCtrlA && k <= tcell.KeyCtrlZ {
 		return fmt.Sprintf("ctrl-%c", 'a'+rune(k-tcell.KeyCtrlA))
