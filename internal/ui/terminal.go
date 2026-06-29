@@ -51,7 +51,8 @@ type Options struct {
 	Padding string // empty space inside the border
 	Border  string // border style: "", "none", "rounded", "sharp", ...
 
-	Bind []string // --bind specs (key/event -> actions)
+	Bind       []string // --bind specs (key/event -> actions)
+	JumpLabels string   // characters used to label rows in jump mode
 }
 
 // Result is what the user picked.
@@ -116,7 +117,13 @@ func Run(items []string, opts Options) (Result, error) {
 		margin:        parseInsets(opts.Margin),
 		padding:       parseInsets(opts.Padding),
 		bindings:      bindings,
+		labelRows:     map[rune]int{},
 	}
+	labels := opts.JumpLabels
+	if labels == "" {
+		labels = "asdfghjkl;qwertyuiopzxcvbnm"
+	}
+	m.jumpLabels = []rune(labels)
 	switch strings.ToLower(opts.Border) {
 	case "", "none":
 		m.border = false
@@ -206,6 +213,13 @@ type model struct {
 
 	bindings map[string][]action
 	inEvent  bool // guards against event bindings re-firing events
+
+	reloadStack [][]string // previous item lists, for the `backward` action
+
+	jumpMode   bool
+	jumpAccept bool
+	jumpLabels []rune
+	labelRows  map[rune]int // label rune -> match index (set during render)
 }
 
 // theme holds the foreground colors for UI elements (overridable via --color).
@@ -371,6 +385,12 @@ func (m *model) runActions(acts []action) (bool, Result) {
 			return true, Result{Become: m.expandFor(a.arg), Query: string(m.query)}
 		case actReload:
 			m.reload(m.expandFor(a.arg))
+		case actBackward:
+			m.backward()
+		case actJump:
+			m.startJump(false)
+		case actJumpAccept:
+			m.startJump(true)
 		case actIgnore:
 		}
 	}
@@ -397,8 +417,17 @@ func (m *model) selectAll(sel bool) {
 	}
 }
 
-// reload replaces the candidate list with the output of command.
+// reload replaces the candidate list with the output of command, remembering
+// the previous list so `backward` can return to it (e.g. for folder navigation).
 func (m *model) reload(command string) {
+	prev := make([]string, len(m.items))
+	copy(prev, m.items)
+	const maxStack = 256
+	if len(m.reloadStack) >= maxStack {
+		m.reloadStack = m.reloadStack[1:]
+	}
+	m.reloadStack = append(m.reloadStack, prev)
+
 	out := strings.ReplaceAll(runShell(command), "\r\n", "\n")
 	var items []string
 	for _, line := range strings.Split(out, "\n") {
@@ -411,6 +440,31 @@ func (m *model) reload(command string) {
 	m.selected = map[int]bool{}
 	m.recompute()
 	m.refreshPreview()
+}
+
+// backward restores the item list from before the last reload (the "go back"
+// half of folder navigation).
+func (m *model) backward() {
+	n := len(m.reloadStack)
+	if n == 0 {
+		return
+	}
+	m.items = m.reloadStack[n-1]
+	m.reloadStack = m.reloadStack[:n-1]
+	m.opts.Colors = nil
+	m.selected = map[int]bool{}
+	m.recompute()
+	m.refreshPreview()
+}
+
+// startJump enters jump mode: the next render labels the visible rows and the
+// next keypress jumps the cursor to the chosen row (and accepts if accept).
+func (m *model) startJump(accept bool) {
+	if len(m.matches) == 0 {
+		return
+	}
+	m.jumpMode = true
+	m.jumpAccept = accept
 }
 
 // execute suspends the screen, runs an interactive command attached to the
@@ -466,6 +520,22 @@ func (m *model) accept() Result {
 }
 
 func (m *model) handleKey(ev *tcell.EventKey) (bool, Result) {
+	// In jump mode the next keypress chooses a labeled row.
+	if m.jumpMode {
+		m.jumpMode = false
+		accept := m.jumpAccept
+		if ev.Key() == tcell.KeyRune {
+			if idx, ok := m.labelRows[ev.Rune()]; ok {
+				m.cursor = idx
+				m.refreshPreview()
+				if accept {
+					return true, m.accept()
+				}
+			}
+		}
+		return false, Result{} // any non-label key just cancels jump mode
+	}
+
 	// Expect keys accept the selection and report which key was pressed.
 	if len(m.expect) > 0 {
 		if name := keyName(ev); name != "" && m.expect[name] {
@@ -769,6 +839,9 @@ func (m *model) renderFinder(lx, ly, lw, lh int) {
 		m.offset = 0
 	}
 
+	if m.jumpMode {
+		m.labelRows = map[rune]int{}
+	}
 	for row := 0; row < listRows; row++ {
 		idx := m.offset + row
 		if idx >= len(m.matches) {
@@ -776,7 +849,13 @@ func (m *model) renderFinder(lx, ly, lw, lh int) {
 		}
 		mt := m.matches[idx]
 		yy := rowOf(row)
-		if idx == m.cursor {
+		if m.jumpMode {
+			if row < len(m.jumpLabels) {
+				lbl := m.jumpLabels[row]
+				m.labelRows[lbl] = idx
+				puts(s, lx, yy, string(lbl), pointerStyle)
+			}
+		} else if idx == m.cursor {
 			puts(s, lx, yy, ">", pointerStyle)
 		}
 		if m.opts.Multi && m.selected[mt.Index] {

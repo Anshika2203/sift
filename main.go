@@ -79,9 +79,11 @@ Interface:
       --bind K:ACT[,..]  bind keys/events to actions (repeatable); actions:
                          up down accept abort toggle select-all deselect-all
                          clear-query toggle-preview preview-up preview-down
-                         change-query(..) change-prompt(..) put(..)
-                         execute(..) execute-silent(..) become(..) reload(..)
+                         change-query(..) change-prompt(..) put(..) jump
+                         jump-accept backward reload(..) execute(..)
+                         execute-silent(..) become(..)
                          events: start, change, focus
+      --jump-labels STR characters used to label rows for the jump action
       --header STR       fixed header line(s) shown above the list
       --header-lines N   treat the first N input lines as a sticky header
 
@@ -151,6 +153,7 @@ type config struct {
 	padding     string
 	border      string
 	bind        []string
+	jumpLabels  string
 }
 
 func parseTiebreak(spec string) ([]matcher.Tiebreak, error) {
@@ -294,6 +297,8 @@ func parseArgs(args []string) (config, error) {
 			if v, err = next(&i, a); err == nil {
 				c.bind = append(c.bind, v)
 			}
+		case "--jump-labels":
+			c.jumpLabels, err = next(&i, a)
 		case "--header":
 			c.header, err = next(&i, a)
 		case "--header-lines":
@@ -552,6 +557,7 @@ func main() {
 		Padding:       cfg.padding,
 		Border:        cfg.border,
 		Bind:          cfg.bind,
+		JumpLabels:    cfg.jumpLabels,
 	})
 	if err != nil {
 		fail(err)

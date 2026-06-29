@@ -39,6 +39,9 @@ const (
 	actExecuteSilent
 	actBecome
 	actReload
+	actBackward
+	actJump
+	actJumpAccept
 )
 
 type action struct {
@@ -85,6 +88,10 @@ var actionNames = map[string]actionSpec{
 	"execute-silent":       {actExecuteSilent, true},
 	"become":               {actBecome, true},
 	"reload":               {actReload, true},
+	"backward":             {actBackward, false},
+	"reload-back":          {actBackward, false},
+	"jump":                 {actJump, false},
+	"jump-accept":          {actJumpAccept, false},
 }
 
 // parseBindings parses one or more --bind specs into a key/event -> actions map.
