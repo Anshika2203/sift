@@ -86,6 +86,8 @@ Interface:
       --jump-labels STR characters used to label rows for the jump action
       --header STR       fixed header line(s) shown above the list
       --header-lines N   treat the first N input lines as a sticky header
+      --footer STR       sticky footer line(s) at the very bottom
+      --style PRESET     default | minimal | full
 
 Scripting:
   -f, --filter STR       non-interactive: print matches for STR and exit
@@ -154,6 +156,8 @@ type config struct {
 	border      string
 	bind        []string
 	jumpLabels  string
+	footer      string
+	style       string
 }
 
 func parseTiebreak(spec string) ([]matcher.Tiebreak, error) {
@@ -299,6 +303,21 @@ func parseArgs(args []string) (config, error) {
 			}
 		case "--jump-labels":
 			c.jumpLabels, err = next(&i, a)
+		case "--footer":
+			c.footer, err = next(&i, a)
+		case "--style":
+			if v, err = next(&i, a); err == nil {
+				switch v {
+				case "full":
+					c.border, c.padding = "rounded", "0,1"
+				case "minimal":
+					c.border, c.padding = "", ""
+				case "default":
+				default:
+					err = fmt.Errorf("invalid --style: %q (use default, minimal, full)", v)
+				}
+				c.style = v
+			}
 		case "--header":
 			c.header, err = next(&i, a)
 		case "--header-lines":
@@ -409,6 +428,13 @@ func parseArgs(args []string) (config, error) {
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "sift: "+err.Error())
 	os.Exit(2)
+}
+
+func splitLinesOrNil(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 func reverse(s []string) {
@@ -558,6 +584,7 @@ func main() {
 		Border:        cfg.border,
 		Bind:          cfg.bind,
 		JumpLabels:    cfg.jumpLabels,
+		Footer:        splitLinesOrNil(cfg.footer),
 	})
 	if err != nil {
 		fail(err)

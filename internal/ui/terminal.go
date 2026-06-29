@@ -53,6 +53,7 @@ type Options struct {
 
 	Bind       []string // --bind specs (key/event -> actions)
 	JumpLabels string   // characters used to label rows in jump mode
+	Footer     []string // sticky footer lines shown at the very bottom
 }
 
 // Result is what the user picked.
@@ -637,7 +638,7 @@ func (m *model) listHeight() int {
 	if m.opts.Preview != "" && !m.previewHidden && (m.pv.pos == "up" || m.pv.pos == "down") {
 		lh = h - m.previewSize(h) - 1
 	}
-	top := 2 + len(m.opts.Header)
+	top := 2 + len(m.opts.Header) + len(m.opts.Footer)
 	if lh-top < 1 {
 		return 1
 	}
@@ -787,28 +788,33 @@ func (m *model) renderFinder(lx, ly, lw, lh int) {
 	matchStyle := tcell.StyleDefault.Foreground(th.hl).Bold(true)
 	selStyle := tcell.StyleDefault.Foreground(th.marker).Bold(true)
 	headerStyle := tcell.StyleDefault.Foreground(th.header)
+	footerStyle := tcell.StyleDefault.Foreground(tcell.ColorGray)
 	textStyle := tcell.StyleDefault
 	if th.fg != tcell.ColorDefault {
 		textStyle = textStyle.Foreground(th.fg)
 	}
 
 	nHeader := len(m.opts.Header)
-	listRows := lh - 2 - nHeader
+	nFooter := len(m.opts.Footer)
+	listRows := lh - 2 - nHeader - nFooter
 	if listRows < 0 {
 		listRows = 0
 	}
+	footerY0 := ly + lh - nFooter // footer occupies the last nFooter rows
 
 	// Row positions depend on the layout. reverse = prompt at top; otherwise
 	// (default) prompt at the bottom with the best match nearest it.
-	var promptY, counterY, headerY0, listTop int
+	var promptY, counterY, headerY0, listTop, listBottom int
 	rowOf := func(row int) int { return listTop + row } // index offset -> screen row
 	if m.reverse {
 		promptY, counterY, headerY0, listTop = ly, ly+1, ly+2, ly+2+nHeader
+		listBottom = listTop + listRows - 1
 	} else {
-		promptY = ly + lh - 1
-		counterY = ly + lh - 2
-		headerY0 = ly + lh - 2 - nHeader
-		listBottom := ly + lh - 3 - nHeader
+		// bottom layout: [list][header][counter][prompt][footer]
+		promptY = footerY0 - 1
+		counterY = promptY - 1
+		headerY0 = counterY - nHeader
+		listBottom = headerY0 - 1
 		rowOf = func(row int) int { return listBottom - row }
 	}
 
@@ -872,12 +878,16 @@ func (m *model) renderFinder(lx, ly, lw, lh int) {
 		drawMatch(s, lx+2, yy, lw-2, mt, spans, base, matchStyle)
 	}
 
+	for k, fl := range m.opts.Footer {
+		puts(s, lx, footerY0+k, truncate(fl, lw), footerStyle)
+	}
+
 	// Record geometry so mouse clicks can be mapped back to list indices.
 	m.geoLx, m.geoListRows, m.geoReverse = lx, listRows, m.reverse
 	if m.reverse {
 		m.geoListY0 = listTop
 	} else {
-		m.geoListBottom = ly + lh - 3 - nHeader
+		m.geoListBottom = listBottom
 	}
 }
 
